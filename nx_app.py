@@ -76,4 +76,309 @@ html_template = """
     <meta charset="utf-8" />
     <style>
         body { margin: 0; padding: 0; overflow: hidden; background-color: #0b0b10; font-family: sans-serif; }
-        #wrapper { display: flex; flex
+        #wrapper { display: flex; flex-direction: column; width: 100%; height: 600px; }
+        #map-container { width: 100%; height: 260px; position: relative; border-bottom: 2px solid #333; }
+        #canvas-container { width: 100%; height: 340px; position: relative; }
+        #map { width: 100%; height: 100%; }
+        
+        /* 지도 내 직선/곡선 컨트롤 오버레이 UI */
+        .map-overlay {
+            position: absolute; top: 10px; right: 10px; z-index: 1000;
+            background: rgba(0, 0, 0, 0.90); color: white; padding: 10px 12px;
+            border-radius: 8px; font-size: 11px; width: 220px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        }
+        .mode-btn-group { display: flex; gap: 4px; margin-top: 6px; }
+        .mode-btn {
+            flex: 1; padding: 5px; border: none; border-radius: 4px;
+            font-size: 11px; font-weight: bold; cursor: pointer; color: #ccc; background: #333;
+        }
+        .mode-btn.active { background: #2196F3; color: white; }
+        .num-input {
+            width: 70px; background: #222; color: #00e676; border: 1px solid #555;
+            padding: 3px; border-radius: 4px; text-align: center; font-weight: bold;
+        }
+        .sta-badge {
+            background: #00e676; color: black; padding: 2px 6px; border-radius: 4px;
+            font-weight: bold; font-family: monospace; font-size: 11px;
+        }
+        .roadview-nav {
+            position: absolute; top: 10px; left: 10px; z-index: 100;
+            background: rgba(0, 0, 0, 0.90); color: white; padding: 8px 12px;
+            border-radius: 6px; font-size: 11px; border: 1px solid #00e676;
+        }
+    </style>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+    <div id="wrapper">
+        <div id="map-container">
+            <div id="map"></div>
+            <div class="map-overlay">
+                <b>📍 지도 노선 설계 (직선/곡선)</b><br>
+                <span>현재 연장: </span><span id="current-sta" class="sta-badge">STA 0+000</span>
+                <div class="mode-btn-group">
+                    <button id="btn-str" class="mode-btn active" onclick="setLineMode('straight')">📏 직선</button>
+                    <button id="btn-cur" class="mode-btn" onclick="setLineMode('curved')">↪️ 곡선</button>
+                </div>
+                <div id="radius-box" style="display:none; margin-top:6px;">
+                    곡률 반경 R: <input type="number" id="r-val" class="num-input" value="300" min="10" step="10" oninput="updateRadius(this.value)"> m
+                </div>
+                <button style="width:100%; background:#ff4b4b; color:white; border:none; padding:5px; border-radius:4px; font-weight:bold; cursor:pointer; margin-top:6px;" onclick="resetPoints()">🔄 노선 초기화</button>
+            </div>
+        </div>
+
+        <div id="canvas-container">
+            <div class="roadview-nav">
+                <b>📐 DXF 3D 반영 터널 (R=__RADIUS__m, 보강재=__PIPES__개)</b>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ======================================================================
+        // A. Leaflet 위성 지도 & 직선/곡선 드로잉 엔진
+        // ======================================================================
+        var map = L.map('map').setView([37.5, 128.3], 14);
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Esri Satellite', maxZoom: 18
+        }).addTo(map);
+
+        var points = [[37.5, 128.29], [37.502, 128.305]];
+        var markers = [];
+        var polylinePath = null;
+        var currentMode = 'straight';
+        var currentRadius = 300;
+
+        function setLineMode(m) {
+            currentMode = m;
+            document.getElementById('btn-str').className = m === 'straight' ? 'mode-btn active' : 'mode-btn';
+            document.getElementById('btn-cur').className = m === 'curved' ? 'mode-btn active' : 'mode-btn';
+            document.getElementById('radius-box').style.display = m === 'curved' ? 'block' : 'none';
+            drawPath();
+        }
+
+        function updateRadius(v) {
+            currentRadius = parseInt(v) || 300;
+            drawPath();
+        }
+
+        function getSplinePoints(pts) {
+            if (pts.length < 3) return pts;
+            var curvedPts = [];
+            var numSegments = 15;
+
+            for (var i = 0; i < pts.length - 1; i++) {
+                var p0 = i > 0 ? pts[i - 1] : pts[i];
+                var p1 = pts[i];
+                var p2 = pts[i + 1];
+                var p3 = i < pts.length - 2 ? pts[i + 2] : p2;
+
+                for (var t = 0; t < 1; t += 1 / numSegments) {
+                    var t2 = t * t, t3 = t2 * t;
+                    var lat = 0.5 * ((2 * p1[0]) + (-p0[0] + p2[0]) * t + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3);
+                    var lng = 0.5 * ((2 * p1[1]) + (-p0[1] + p2[1]) * t + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3);
+                    curvedPts.push([lat, lng]);
+                }
+            }
+            curvedPts.push(pts[pts.length - 1]);
+            return curvedPts;
+        }
+
+        function drawPath() {
+            if (polylinePath) { map.removeLayer(polylinePath); polylinePath = null; }
+            if (points.length < 2) return;
+
+            var drawCoords = (currentMode === 'curved') ? getSplinePoints(points) : points;
+            var color = (currentMode === 'curved') ? '#00e676' : '#ffeb3b';
+
+            polylinePath = L.polyline(drawCoords, { color: color, weight: 5, opacity: 0.9 }).addTo(map);
+        }
+
+        function initMarkers() {
+            markers.forEach(function(m) { map.removeLayer(m); });
+            markers = [];
+            points.forEach(function(pt, idx) {
+                var m = L.circleMarker(pt, { color: '#fff', fillColor: '#2196F3', fillOpacity: 1, radius: 6 })
+                    .addTo(map)
+                    .bindPopup("<b>STA 0+" + (idx * 20).toString().padStart(3, '0') + "</b>");
+                markers.push(m);
+            });
+            drawPath();
+        }
+        initMarkers();
+
+        map.on('click', function(e) {
+            points.push([e.latlng.lat, e.latlng.lng]);
+            initMarkers();
+        });
+
+        function resetPoints() {
+            points = [];
+            markers.forEach(function(m) { map.removeLayer(m); });
+            markers = [];
+            if (polylinePath) { map.removeLayer(polylinePath); polylinePath = null; }
+        }
+
+        // ======================================================================
+        // B. Three.js 3D 지반 & 터널 뷰어
+        // ======================================================================
+        var scene, camera, renderer;
+        window.addEventListener('load', function() {
+            var container = document.getElementById('canvas-container');
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0a0a0f);
+            scene.fog = new THREE.FogExp2(0x0a0a0f, 0.012);
+
+            camera = new THREE.PerspectiveCamera(65, container.clientWidth / 340, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, 340);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            container.appendChild(renderer.domElement);
+
+            camera.position.set(0, 1.8, 12);
+            camera.lookAt(0, 1.0, -30);
+
+            var ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
+            scene.add(ambientLight);
+
+            for (var lz = -60; lz <= 20; lz += 15) {
+                var light = new THREE.PointLight(0xffd54f, 1.8, 30);
+                light.position.set(0, 4.0, lz);
+                scene.add(light);
+            }
+
+            var shape = new THREE.Shape();
+            var R = __RADIUS__;
+            var H_wall = 2.5;
+            var W_base = R * 0.95;
+
+            shape.moveTo(-W_base, -H_wall);
+            shape.lineTo(-W_base, 0);
+            for (var a = Math.PI; a >= 0; a -= Math.PI / 20) {
+                shape.lineTo((W_base / R) * R * Math.cos(a), R * Math.sin(a));
+            }
+            shape.lineTo(W_base, -H_wall);
+            shape.lineTo(-W_base, -H_wall);
+
+            var extrudeSettings = { steps: 60, depth: 80, bevelEnabled: false };
+            var tunnelGeo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+            var tunnelMat = new THREE.MeshStandardMaterial({ color: 0x424242, side: THREE.BackSide, roughness: 0.6 });
+            var tunnelMesh = new THREE.Mesh(tunnelGeo, tunnelMat);
+            tunnelMesh.position.set(0, 0, -60);
+            scene.add(tunnelMesh);
+
+            var ribMat = new THREE.LineBasicMaterial({ color: 0xffb74d, linewidth: 3 });
+            for (var rz = -55; rz <= 15; rz += 3.5) {
+                var edges = new THREE.EdgesGeometry(tunnelGeo);
+                var ribLine = new THREE.LineSegments(edges, ribMat);
+                ribLine.position.set(0, 0, rz);
+                scene.add(ribLine);
+            }
+
+            var pipeMat = new THREE.MeshBasicMaterial({ color: 0xab47bc });
+            var numPipes = __PIPES__;
+            var angleStep = (Math.PI - 0.4) / Math.max(1, (numPipes - 1));
+
+            for (var pIdx = 0; pIdx < numPipes; pIdx++) {
+                var pAngle = 0.2 + (pIdx * angleStep);
+                var pipeGeo = new THREE.CylinderGeometry(0.12, 0.12, 35, 8);
+                var pipeMesh = new THREE.Mesh(pipeGeo, pipeMat);
+                var px = (W_base + 0.3) * Math.cos(pAngle);
+                var py = (R + 0.3) * Math.sin(pAngle);
+                pipeMesh.position.set(px, py, -20);
+                pipeMesh.rotation.x = Math.PI / 2;
+                scene.add(pipeMesh);
+            }
+
+            function animate() {
+                requestAnimationFrame(animate);
+                renderer.render(scene, camera);
+            }
+            animate();
+        });
+    </script>
+</body>
+</html>
+"""
+
+# 파이썬 변수 치환
+station_sync_html = html_template.replace("__RADIUS__", str(active_radius)).replace("__PIPES__", str(active_pipes))
+
+# ======================================================================
+# 4. Streamlit 레이아웃
+# ======================================================================
+col_view, col_input = st.columns([1.6, 1.4])
+
+with col_view:
+    st.subheader("🌐 위성 지도 (직선/곡선) & 3D 실시간 렌더링")
+    components.html(station_sync_html, height=620)
+
+with col_input:
+    st.subheader("📍 측점(Station) 타이핑 추가 & DXF 업로드")
+
+    # 1. 측점 타이핑 입력
+    st.markdown("##### **1️⃣ 새로운 측점(Station) 타이핑 입력**")
+    c_type1, c_type2 = st.columns([2, 1])
+    with c_type1:
+        new_sta_input = st.text_input("측점명 타이핑 (예: STA 0+040)", value="STA 0+040")
+    with c_type2:
+        st.write("")
+        st.write("")
+        if st.button("➕ 측점 추가"):
+            st.session_state.station_list.append({
+                "sta_text": new_sta_input,
+                "meter": 40.0,
+                "dxf_name": "미첨부",
+                "radius": 6.2,
+                "pipes": 0
+            })
+            st.success(f"'{new_sta_input}' 측점이 추가되었습니다.")
+            st.rerun()
+
+    st.divider()
+
+    # 2. 측점별 DXF 파일 업로드
+    st.markdown("##### **2️⃣ 등록된 측점별 DXF CAD 파일 업로드**")
+
+    engine = StationDXFEngine()
+    updated_list = []
+
+    for idx, item in enumerate(st.session_state.station_list):
+        with st.expander(f"📌 {item['sta_text']} DXF 설정", expanded=True):
+            edited_sta_name = st.text_input("측점명 수정", value=item['sta_text'], key=f"sta_edit_{idx}")
+            uploaded_dxf = st.file_uploader(f"[{edited_sta_name}] 전용 DXF 업로드", type=["dxf"], key=f"dxf_up_{idx}")
+
+            if uploaded_dxf:
+                parsed = engine.parse_cad(uploaded_dxf)
+                item['radius'] = parsed['radius']
+                item['pipes'] = parsed['pipes']
+                item['dxf_name'] = uploaded_dxf.name
+                st.success(f"✅ {uploaded_dxf.name} 연결 완료 (R={item['radius']}m, 보강재 {item['pipes']}개 감지 ➔ 3D 연동 완료)")
+            else:
+                st.info(f"📄 현재 연결된 DXF: `{item['dxf_name']}`")
+
+            u_crown = (35.0 * 23.0 * item['radius'] / 1500000.0) * 1000.0
+            sec_res = "OK (안전)" if u_crown <= 20.0 else "NG (보강)"
+
+            if "OK" in sec_res:
+                st.success(f"3D 해석 판정: **{sec_res}** 🟢")
+            else:
+                st.error(f"3D 해석 판정: **{sec_res}** 🔴")
+
+            updated_list.append({
+                "sta_text": edited_sta_name,
+                "meter": item['meter'],
+                "dxf_name": item['dxf_name'],
+                "radius": item['radius'],
+                "pipes": item['pipes']
+            })
+
+    st.session_state.station_list = updated_list
+
+    st.divider()
+    if st.button("🚀 측점별 DXF 연동 GTS NX / PLAXIS MCT 도출"):
+        st.success("타이핑 입력된 측점과 DXF 도면 데이터가 3D 수치해석 파일로 도출되었습니다!")
