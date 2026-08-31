@@ -17,7 +17,7 @@ st.markdown("실제 NATM 터널 단면(아치형 상반 + 평탄 하반 + 강지
 st.divider()
 
 # ======================================================================
-# 2. Three.js - 정밀 NATM 아치 터널 형상 & 거리뷰 HTML/JS
+# 2. Three.js - NATM 아치 터널 형상 & 거리뷰 HTML/JS (JS 주석 문법 오류 완벽 수정)
 # ======================================================================
 threejs_natm_tunnel_html = """
 <!DOCTYPE html>
@@ -50,25 +50,25 @@ threejs_natm_tunnel_html = """
 
     <script>
         window.addEventListener('load', function() {
-            const container = document.getElementById('canvas-container');
+            var container = document.getElementById('canvas-container');
 
-            // 1. Scene, Camera, Renderer
-            const scene = new THREE.Scene();
+            // 1. Scene, Camera, Renderer 생성
+            var scene = new THREE.Scene();
             scene.background = new THREE.Color(0x0a0a0f);
             scene.fog = new THREE.FogExp2(0x0a0a0f, 0.012);
 
-            const camera = new THREE.PerspectiveCamera(70, container.clientWidth / 580, 0.1, 1000);
-            const renderer = new THREE.WebGLRenderer({ antialias: true });
+            var camera = new THREE.PerspectiveCamera(70, container.clientWidth / 580, 0.1, 1000);
+            var renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(container.clientWidth, 580);
             renderer.setPixelRatio(window.devicePixelRatio);
             container.appendChild(renderer.domElement);
 
             // 2. 거리뷰 마우스 탐색 컨트롤
-            let isDragging = false;
-            let previousMousePosition = { x: 0, y: 0 };
-            let cameraRadius = 18;
-            let cameraTheta = 0;
-            let cameraPhi = Math.PI / 2.3;
+            var isDragging = false;
+            var previousMousePosition = { x: 0, y: 0 };
+            var cameraRadius = 18;
+            var cameraTheta = 0;
+            var cameraPhi = Math.PI / 2.3;
 
             function updateCameraPosition() {
                 camera.position.x = cameraRadius * Math.sin(cameraPhi) * Math.sin(cameraTheta);
@@ -81,8 +81,8 @@ threejs_natm_tunnel_html = """
             renderer.domElement.addEventListener('mousedown', function() { isDragging = true; });
             renderer.domElement.addEventListener('mousemove', function(e) {
                 if (isDragging) {
-                    const deltaX = e.clientX - previousMousePosition.x;
-                    const deltaY = e.clientY - previousMousePosition.y;
+                    var deltaX = e.clientX - previousMousePosition.x;
+                    var deltaY = e.clientY - previousMousePosition.y;
 
                     cameraTheta -= deltaX * 0.005;
                     cameraPhi -= deltaY * 0.005;
@@ -99,70 +99,70 @@ threejs_natm_tunnel_html = """
                 updateCameraPosition();
             });
 
-            // 3. 조명 (터널 조명 및 비상등 표현)
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            // 3. 조명 설정
+            var ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
             scene.add(ambientLight);
 
-            for (let lz = -70; lz <= 10; lz += 20) {
-                const light = new THREE.PointLight(0xffd54f, 1.2, 25);
+            for (var lz = -70; lz <= 10; lz += 20) {
+                var light = new THREE.PointLight(0xffd54f, 1.2, 25);
                 light.position.set(0, 4.5, lz);
                 scene.add(light);
             }
 
             // 4. NATM 터널 2D 단면 형상 생성 (아치 상반 + 수직 측벽 + 하반 평탄)
-            const shape = new THREE.Shape();
-            const R = 6.2;       # 상반 아치 반지름
-            const H_wall = 2.5;  # 측벽 높이
-            const W_base = 6.0;  # 바닥 반폭
+            var shape = new THREE.Shape();
+            var R = 6.2;       // 상반 아치 반지름
+            var H_wall = 2.5;  // 측벽 높이
+            var W_base = 6.0;  // 바닥 반폭
 
             shape.moveTo(-W_base, -H_wall);
             shape.lineTo(-W_base, 0);
             
             // 아치 곡선 생성 (상반 마굴)
-            for (let a = Math.PI; a >= 0; a -= Math.PI / 20) {
-                let ax = (W_base / R) * R * Math.cos(a);
-                let ay = (R * Math.sin(a));
+            for (var a = Math.PI; a >= 0; a -= Math.PI / 20) {
+                var ax = (W_base / R) * R * Math.cos(a);
+                var ay = (R * Math.sin(a));
                 shape.lineTo(ax, ay);
             }
             shape.lineTo(W_base, -H_wall);
-            shape.lineTo(-W_base, -H_wall); // 바닥 인버트 closed
+            shape.lineTo(-W_base, -H_wall);
 
-            // 5. 3D 돌출 (ExtrudeGeometry)로 압출 터널 보디 생성
-            const extrudeSettings = {
+            // 5. 3D 압출 터널 보디 생성
+            var extrudeSettings = {
                 steps: 60,
                 depth: 80,
                 bevelEnabled: false
             };
 
-            const tunnelGeo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-            const tunnelMat = new THREE.MeshStandardMaterial({
+            var tunnelGeo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+            var tunnelMat = new THREE.MeshStandardMaterial({
                 color: 0x424242,
-                side: THREE.BackSide, // 터널 내부가 보이도록 설정
+                side: THREE.BackSide,
                 roughness: 0.8
             });
 
-            const tunnelMesh = new THREE.Mesh(tunnelGeo, tunnelMat);
+            var tunnelMesh = new THREE.Mesh(tunnelGeo, tunnelMat);
             tunnelMesh.position.set(0, 0, -60);
             scene.add(tunnelMesh);
 
             // 6. 강지보재(H-Beam Steel Rib) 링 격자 배치
-            const ribMat = new THREE.LineBasicMaterial({ color: 0xffb74d, linewidth: 3 });
-            for (let rz = -55; rz <= 15; rz += 3.5) {
-                const edges = new THREE.EdgesGeometry(tunnelGeo);
-                const ribLine = new THREE.LineSegments(edges, ribMat);
+            var ribMat = new THREE.LineBasicMaterial({ color: 0xffb74d, linewidth: 3 });
+            for (var rz = -55; rz <= 15; rz += 3.5) {
+                var edges = new THREE.EdgesGeometry(tunnelGeo);
+                var ribLine = new THREE.LineSegments(edges, ribMat);
                 ribLine.position.set(0, 0, rz);
                 scene.add(ribLine);
             }
 
             // 7. 방사형 록볼트 (Rockbolts - D25 Steel Rods)
-            const boltMat = new THREE.MeshBasicMaterial({ color: 0xff1744 });
-            for (let bz = -55; bz <= 15; bz += 4.5) {
-                for (let angle = 0.2; angle <= Math.PI - 0.2; angle += 0.35) {
-                    const boltGeo = new THREE.CylinderGeometry(0.08, 0.08, 3.8, 8);
-                    const bolt = new THREE.Mesh(boltGeo, boltMat);
+            var boltMat = new THREE.MeshBasicMaterial({ color: 0xff1744 });
+            for (var bz = -55; bz <= 15; bz += 4.5) {
+                for (var angle = 0.2; angle <= Math.PI - 0.2; angle += 0.35) {
+                    var boltGeo = new THREE.CylinderGeometry(0.08, 0.08, 3.8, 8);
+                    var bolt = new THREE.Mesh(boltGeo, boltMat);
 
-                    const bx = (W_base + 1.9) * Math.cos(angle);
-                    const by = (R + 1.9) * Math.sin(angle);
+                    var bx = (W_base + 1.9) * Math.cos(angle);
+                    var by = (R + 1.9) * Math.sin(angle);
 
                     bolt.position.set(bx, by, bz);
                     bolt.rotation.z = angle - Math.PI / 2;
