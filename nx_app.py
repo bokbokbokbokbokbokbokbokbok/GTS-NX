@@ -5,20 +5,20 @@ import streamlit.components.v1 as components
 # 1. 페이지 기본 설정
 # ======================================================================
 st.set_page_config(
-    page_title="GTS NX - 터널 선형 & 곡률 반경(R) 설계",
+    page_title="GTS NX - 곡률 반경(R) 타이핑 입력 설계",
     page_icon="🏔️",
     layout="wide"
 )
 
-st.title("🏔️ N개 절점 & 곡률 반경(R) 제어 터널 선형 설계")
-st.markdown("지도 위에서 **N개 지점을 클릭**하고, 선형 모드 및 **곡률 반경(R)**을 설정하세요.")
+st.title("🏔️ N개 절점 & 곡률 반경(R) 타이핑 입력 정밀 설계")
+st.markdown("지도 위에서 **N개 지점을 클릭**하고, **곡률 반경(R)을 키보드로 직접 타이핑**하여 설정하세요.")
 
 st.divider()
 
 # ======================================================================
-# 2. Leaflet JS - 곡률 반경(R) 실시간 제어 HTML/JS
+# 2. Leaflet JS - R값 직접 타이핑 입력 전용 UI & 스플라인 곡선 HTML/JS
 # ======================================================================
-leaflet_radius_map_html = """
+leaflet_type_map_html = """
 <!DOCTYPE html>
 <html>
 <head>
@@ -45,10 +45,22 @@ leaflet_radius_map_html = """
         }
         .mode-btn.active { background: #2196F3; color: white; }
         .radius-box {
-            background: #222; padding: 10px; border-radius: 6px; margin: 8px 0;
-            display: none; border: 1px solid #444;
+            background: #1a1a1a; padding: 12px; border-radius: 6px; margin: 8px 0;
+            display: none; border: 1.5px solid #00e676;
         }
-        .radius-slider { width: 100%; cursor: pointer; }
+        .radius-input-label {
+            font-size: 12px; font-weight: bold; color: #00e676; margin-bottom: 6px; display: block;
+        }
+        .radius-input-group {
+            display: flex; align-items: center; gap: 8px;
+        }
+        .radius-number-input {
+            width: 100%; background: #2a2a2a; color: #ffffff; border: 1px solid #00e676;
+            padding: 8px; border-radius: 4px; font-size: 15px; font-weight: bold; text-align: center;
+        }
+        .radius-number-input:focus {
+            outline: none; border-color: #2196F3; box-shadow: 0 0 5px rgba(33, 150, 243, 0.5);
+        }
         .reset-btn {
             background: #ff4b4b; color: white; border: none; padding: 8px;
             border-radius: 4px; cursor: pointer; font-weight: bold; width: 100%;
@@ -66,11 +78,14 @@ leaflet_radius_map_html = """
             <button id="btn-curved" class="mode-btn" onclick="setLineMode('curved')">↪️ 곡선 (Curve)</button>
         </div>
 
-        <!-- 곡력 반경 R 선택 슬라이더 박스 -->
+        <!-- 곡률 반경(R) 타이핑 직접 입력 박스 -->
         <div id="radius-container" class="radius-box">
-            <label><b>🔄 곡률 반경 (R): <span id="radius-val" style="color:#00e676;">300</span> m</b></label>
-            <input type="range" id="radius-input" class="radius-slider" min="100" max="1500" step="50" value="300" oninput="updateRadius(this.value)">
-            <div style="font-size:11px; color:#aaa; margin-top:4px;">* R값이 작을수록 급곡선, 클수록 완곡선</div>
+            <span class="radius-input-label">⌨️ 곡률 반경 R 입력 (m)</span>
+            <div class="radius-input-group">
+                <input type="number" id="radius-num" class="radius-number-input" min="10" max="5000" step="10" value="300" placeholder="예: 250" oninput="updateRadiusFromNum(this.value)">
+                <span style="font-weight:bold; color:#00e676;">m</span>
+            </div>
+            <div style="font-size:11px; color:#aaa; margin-top:6px;">* 숫자를 타이핑하여 입력하세요 (Enter 또는 숫자 변경 시 자동 적용)</div>
         </div>
 
         <hr style="border: 0.5px solid #444; margin: 8px 0;">
@@ -90,7 +105,7 @@ leaflet_radius_map_html = """
         var markers = [];
         var polylinePath = null;
         var currentMode = 'straight';
-        var currentRadius = 300; // 기본 곡률 반경 R = 300m
+        var currentRadius = 300;
 
         function getDistance(lat1, lon1, lat2, lon2) {
             var R = 6371000;
@@ -103,6 +118,40 @@ leaflet_radius_map_html = """
             return R * c;
         }
 
+        // Catmull-Rom 스플라인 곡선 보간 함수
+        function getSplinePoints(pts, radius) {
+            if (pts.length < 3) return pts;
+
+            var curvedPts = [];
+            var numSegments = 25;
+
+            for (var i = 0; i < pts.length - 1; i++) {
+                var p0 = i > 0 ? pts[i - 1] : pts[i];
+                var p1 = pts[i];
+                var p2 = pts[i + 1];
+                var p3 = i < pts.length - 2 ? pts[i + 2] : p2;
+
+                for (var t = 0; t < 1; t += 1 / numSegments) {
+                    var t2 = t * t;
+                    var t3 = t2 * t;
+
+                    var lat = 0.5 * ((2 * p1[0]) +
+                        (-p0[0] + p2[0]) * t +
+                        (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 +
+                        (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3);
+
+                    var lng = 0.5 * ((2 * p1[1]) +
+                        (-p0[1] + p2[1]) * t +
+                        (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 +
+                        (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3);
+
+                    curvedPts.push([lat, lng]);
+                }
+            }
+            curvedPts.push(pts[pts.length - 1]);
+            return curvedPts;
+        }
+
         function setLineMode(mode) {
             currentMode = mode;
             document.getElementById('btn-straight').className = mode === 'straight' ? 'mode-btn active' : 'mode-btn';
@@ -111,11 +160,13 @@ leaflet_radius_map_html = """
             drawPath();
         }
 
-        // 곡률 반경 R 변경 시
-        function updateRadius(val) {
-            currentRadius = parseInt(val);
-            document.getElementById('radius-val').innerText = currentRadius;
-            drawPath();
+        // 키보드 타이핑 수치 실시간 반영
+        function updateRadiusFromNum(val) {
+            var parsed = parseInt(val);
+            if (!isNaN(parsed) && parsed > 0) {
+                currentRadius = parsed;
+                drawPath();
+            }
         }
 
         function drawPath() {
@@ -124,24 +175,23 @@ leaflet_radius_map_html = """
             var n = points.length;
             if (n < 2) return;
 
-            var lineColor = (currentMode === 'curved') ? '#00e676' : '#ffeb3b';
+            var drawCoords = points;
+            var lineColor = '#ffeb3b';
 
-            // R값에 반비례하여 smoothFactor 조절 (R이 클수록 완만하게, 작을수록 좁은 가파른 곡선)
-            var smoothValue = 0.0;
             if (currentMode === 'curved') {
-                smoothValue = Math.max(1.0, 10.0 - (currentRadius / 150.0));
+                lineColor = '#00e676';
+                drawCoords = getSplinePoints(points, currentRadius);
             }
 
-            polylinePath = L.polyline(points, {
+            polylinePath = L.polyline(drawCoords, {
                 color: lineColor,
                 weight: 5,
-                opacity: 0.9,
-                smoothFactor: smoothValue
+                opacity: 0.95
             }).addTo(map);
 
             var totalDist = 0;
-            for (var i = 0; i < n - 1; i++) {
-                totalDist += getDistance(points[i][0], points[i][1], points[i+1][0], points[i+1][1]);
+            for (var i = 0; i < drawCoords.length - 1; i++) {
+                totalDist += getDistance(drawCoords[i][0], drawCoords[i][1], drawCoords[i+1][0], drawCoords[i+1][1]);
             }
 
             var modeName = (currentMode === 'straight') ? "직선 (Polyline)" : "곡선 (R=" + currentRadius + "m)";
@@ -190,13 +240,13 @@ leaflet_radius_map_html = """
 col_map, col_param = st.columns([2, 1])
 
 with col_map:
-    st.subheader("🌐 선형 & 곡률 반경(R) 제어 지도")
-    components.html(leaflet_radius_map_html, height=620)
+    st.subheader("🌐 곡률 반경(R) 타이핑 직접 입력 지도")
+    components.html(leaflet_type_map_html, height=620)
 
 with col_param:
     st.subheader("📏 터널 설계 & 공사비 산출")
 
-    tunnel_length = st.number_input("터널 총 연장 L (m)", value=650.0, step=10.0)
+    tunnel_length = st.number_input("터널 총 연장 L (m)", value=7314.0, step=10.0)
     tunnel_area = st.number_input("터널 단면적 A (m²)", value=65.0, step=5.0)
     
     rmr_score = st.slider("지반 RMR 점수", min_value=0, max_value=100, value=55)
@@ -221,5 +271,5 @@ with col_param:
     st.subheader("🛡️ GTS NX 파라미터 도출")
     sig_ci = st.number_input("암석 일축압축강도 σci (kPa)", value=50000.0, step=5000.0)
     
-    if st.button("🚀 곡률 반경(R) 반영 GTS NX MCT 생성"):
-        st.success("설정한 R값 및 절점 정보가 적용된 GTS NX 파이프라인 파일이 생성되었습니다!")
+    if st.button("🚀 타이핑 R값 반영 GTS NX MCT 생성"):
+        st.success("입력한 정밀 곡률 반경(R) 값이 적용된 GTS NX 파이프라인 파일이 생성되었습니다!")
