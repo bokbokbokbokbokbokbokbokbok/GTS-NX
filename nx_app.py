@@ -14,13 +14,13 @@ except ModuleNotFoundError:
 # 1. 페이지 기본 설정
 # ======================================================================
 st.set_page_config(
-    page_title="GTS NX 스타일 ZXY 축 3D 뷰어 & 법선방향 록볼트",
+    page_title="GTS NX 스타일 ZXY 축 3D 뷰어 - 천단부 록볼트",
     page_icon="🧊",
     layout="wide"
 )
 
-st.title("🧊 GTS NX 스타일 ZXY 축 3D 뷰어 (법선방향 록볼트 적용)")
-st.markdown("록볼트가 터널 마굴면의 **법선 방향(수직)으로 관통 배치**되도록 보완했습니다. 마우스 드래그로 ZXY 축을 자유롭게 회전해보세요.")
+st.title("🧊 GTS NX 스타일 ZXY 축 3D 뷰어 (천단부 전용 록볼트 배치)")
+st.markdown("록볼트가 **터널 천단부(Crown) 아치면 수직 방향**으로 암반에 정밀하게 관통·배치되도록 보완했습니다.")
 
 st.divider()
 
@@ -66,7 +66,7 @@ active_radius = st.session_state.station_list[0]['radius']
 active_pipes = st.session_state.station_list[0]['pipes']
 
 # ======================================================================
-# 3. Leaflet 위성 지도 + Three.js (법선방향 록볼트 3D) HTML/JS
+# 3. Leaflet 위성 지도 + Three.js (천단부 록볼트 3D) HTML/JS
 # ======================================================================
 html_template = """
 <!DOCTYPE html>
@@ -141,12 +141,12 @@ html_template = """
         <!-- 2. GTS NX 스타일 ZXY 자유 회전 3D FEA 뷰어 -->
         <div id="canvas-container">
             <div class="roadview-nav">
-                <b>🧊 GTS NX 3D 뷰어 (법선방향 록볼트 🔴 관통 시각화)</b>
+                <b>🧊 GTS NX 3D 뷰어 (천단부 전용 록볼트 🔴 밀착 관통)</b>
             </div>
             <div class="guide-box">
-                🕹️ <b>3D 록볼트 배치:</b><br>
-                • 🔴 <b>록볼트 (D25 Steel Rods):</b> 마굴면 수직(법선) 방향 암반 관통<br>
-                • 🟡 <b>강지보재 (H-Beam Rib):</b> 종방향 아치 격자 배치
+                🕹️ <b>천단부 록볼트 구조:</b><br>
+                • 🔴 <b>천단부 록볼트 (Crown Rockbolts):</b> 상부 천단 아치면에 정밀 밀착되어 상부 암반으로 수직 관통<br>
+                • 🟡 <b>강지보재 (H-Beam Rib):</b> 터널 하중 지지 격자
             </div>
         </div>
     </div>
@@ -237,7 +237,7 @@ html_template = """
         }
 
         // ======================================================================
-        // B. GTS NX 스타일 Three.js OrbitControls & 법선 록볼트 모듈
+        // B. GTS NX 스타일 Three.js OrbitControls & 천단부 전용 록볼트
         // ======================================================================
         var scene, camera, renderer, controls;
         var tunnelMesh, ribGroup, boltGroup, groundMesh, axesHelper;
@@ -263,7 +263,7 @@ html_template = """
             controls.target.set(0, 0, -20);
             controls.update();
 
-            // GTS NX 3차원 축 피봇 (Axes Helper: Red=X, Green=Y, Blue=Z)
+            // ZXY 축 헬퍼
             axesHelper = new THREE.AxesHelper(15);
             axesHelper.position.set(-20, -10, 10);
             scene.add(axesHelper);
@@ -280,7 +280,7 @@ html_template = """
             dirLight2.position.set(-20, -20, -20);
             scene.add(dirLight2);
 
-            // 3D 지반 유한요소망 (Solid Ground Mesh)
+            // 지반
             var groundGeo = new THREE.BoxGeometry(45, 30, 90);
             var groundMat = new THREE.MeshStandardMaterial({
                 color: 0x3e3c38,
@@ -297,7 +297,7 @@ html_template = """
             scene.add(ribGroup);
             scene.add(boltGroup);
 
-            // 3D 터널 및 법선방향 록볼트 재구성 함수
+            // 3D 터널 및 천단부 록볼트 재구성
             window.rebuildTunnel3D = function(isCurved, radius) {
                 if (tunnelMesh) scene.remove(tunnelMesh);
                 while(ribGroup.children.length > 0) ribGroup.remove(ribGroup.children[0]);
@@ -350,39 +350,43 @@ html_template = """
                 var ribLine = new THREE.LineSegments(edges, ribMat);
                 ribGroup.add(ribLine);
 
-                // ★ 법선(Normal Vector) 방향 방사형 록볼트 관통 연산 ★
-                var boltLength = 3.8; // 록볼트 시공 길이 (m)
-                var boltMat = new THREE.MeshStandardMaterial({ color: 0xff1744, metalness: 0.8 }); // 빨간색 록볼트
+                // ★ 천단부(Crown / Roof) 전용 방사형 록볼트 배치 알고리즘 ★
+                var boltLength = 3.5; // 록볼트 길이
+                var boltMat = new THREE.MeshStandardMaterial({ color: 0xff1744, metalness: 0.9 }); // 빨간색 록볼트
                 var numBoltsPerRing = __PIPES__;
-                var zIntervals = [-50, -35, -20, -5, 10]; // 종방향 배치 위치
+                var zIntervals = [-50, -35, -20, -5, 10]; // 종방향 피치
+
+                // 천단부 아치 각도 범위: 0.35*PI ~ 0.65*PI (천정부 상부 아치 전용)
+                var minAngle = Math.PI * 0.35;
+                var maxAngle = Math.PI * 0.65;
+                var angleStep = (maxAngle - minAngle) / Math.max(1, numBoltsPerRing - 1);
 
                 for (var bzIdx = 0; bzIdx < zIntervals.length; bzIdx++) {
                     var bz = zIntervals[bzIdx];
 
-                    // 상반 아치 곡선을 따라 법선(Normal) 방향 계산
                     for (var bIdx = 0; bIdx < numBoltsPerRing; bIdx++) {
-                        var angle = 0.2 + (bIdx * (Math.PI - 0.4) / Math.max(1, numBoltsPerRing - 1));
-                        
-                        // 굴착 표면 위치 (Surface Point)
-                        var sx = W_base * Math.cos(angle);
+                        var angle = minAngle + (bIdx * angleStep);
+
+                        // 1. 천단 아치 표면 절점 좌표 (Surface Point)
+                        var sx = (W_base / R) * R * Math.cos(angle);
                         var sy = R * Math.sin(angle);
 
-                        // 법선 벡터 (Outward Normal Vector)
+                        // 2. 표면 법선(Outward Normal) 방향 단위 벡터
                         var nx = Math.cos(angle);
                         var ny = Math.sin(angle);
 
-                        // 록볼트 기둥 Mesh 생성
-                        var boltGeo = new THREE.CylinderGeometry(0.1, 0.1, boltLength, 8);
+                        // 3. 록볼트 실린더 생성 및 표면 밀착 중심점 배치
+                        var boltGeo = new THREE.CylinderGeometry(0.08, 0.08, boltLength, 8);
                         var boltMesh = new THREE.Mesh(boltGeo, boltMat);
 
-                        // 표면 중심점 계산 및 암반 관통 위치 배치
-                        var midX = sx + (nx * boltLength / 2);
-                        var midY = sy + (ny * boltLength / 2);
+                        // 굴착 표면에서 암반 내부 방향으로 반만큼 나아간 위치가 원통의 중심
+                        var centerX = sx + (nx * boltLength / 2);
+                        var centerY = sy + (ny * boltLength / 2);
 
-                        boltMesh.position.set(midX, midY, bz);
+                        boltMesh.position.set(centerX, centerY, bz);
 
-                        // 록볼트 축을 표면의 법선 방향(Z축 회전)으로 정렬
-                        boltMesh.rotation.z = angle - Math.PI / 2;
+                        // 4. 록볼트를 천단 표면의 수직(법선) 방향으로 회전 정렬
+                        boltMesh.rotation.z = angle - (Math.PI / 2);
 
                         boltGroup.add(boltMesh);
                     }
@@ -455,7 +459,7 @@ with col_input:
                 item['radius'] = parsed['radius']
                 item['pipes'] = parsed['pipes']
                 item['dxf_name'] = uploaded_dxf.name
-                st.success(f"✅ {uploaded_dxf.name} 연결 완료 (R={item['radius']}m, 록볼트 {item['pipes']}개 감지 ➔ 3D 연동 완료)")
+                st.success(f"✅ {uploaded_dxf.name} 연결 완료 (R={item['radius']}m, 천단 록볼트 {item['pipes']}개 감지 ➔ 3D 연동 완료)")
             else:
                 st.info(f"📄 현재 연결된 DXF: `{item['dxf_name']}`")
 
