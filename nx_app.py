@@ -1,5 +1,6 @@
 import math
 import io
+import json
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -14,13 +15,13 @@ except ModuleNotFoundError:
 # 1. 페이지 기본 설정
 # ======================================================================
 st.set_page_config(
-    page_title="자유 이동 3D 터널 로드뷰 & DXF 연동기",
+    page_title="위성 지도 연동 & 자유 이동 3D 터널 로드뷰",
     page_icon="🎥",
     layout="wide"
 )
 
-st.title("🎥 자유 이동(FPS) 3D 터널 로드뷰 & 측점 DXF 연동기")
-st.markdown("3D 화면을 클릭한 후 **`W, A, S, D` 키(이동)**와 **마우스 회전(시선)**을 이용해 터널 내부를 자유롭게 둘러보세요. (ESC: 마우스 해제)")
+st.title("🎥 위성 지도 연동 & 자유 이동 3D 터널 로드뷰")
+st.markdown("위성 지도의 노선과 DXF 데이터가 3D 공간에 **100% 동기화**됩니다. **마우스 드래그(시선 회전) + WASD/화살표 키(이동)**로 터널 내부를 둘러보세요.")
 
 st.divider()
 
@@ -30,7 +31,7 @@ st.divider()
 class StationDXFEngine:
     def __init__(self):
         self.radius = 6.2
-        self.pipes = 0
+        self.pipes = 12
 
     def parse_cad(self, dxf_bytes):
         try:
@@ -55,19 +56,18 @@ class StationDXFEngine:
         except Exception:
             return {"radius": 6.2, "pipes": 12}
 
-# 세션 내 측점 데이터 리스트 관리
+# 세션 내 측점 데이터 관리
 if "station_list" not in st.session_state:
     st.session_state.station_list = [
         {"sta_text": "STA 0+000", "meter": 0.0, "dxf_name": "미첨부", "radius": 6.2, "pipes": 12},
         {"sta_text": "STA 0+020", "meter": 20.0, "dxf_name": "미첨부", "radius": 6.8, "pipes": 8},
     ]
 
-# 선택된 대표 파라미터
 active_radius = st.session_state.station_list[0]['radius']
 active_pipes = st.session_state.station_list[0]['pipes']
 
 # ======================================================================
-# 3. Leaflet 위성 지도 + 자유 이동(WASD+마우스 회전) 3D 로드뷰 HTML
+# 3. Leaflet 위성 지도 + Three.js 완전 연동 HTML/JS
 # ======================================================================
 html_template = """
 <!DOCTYPE html>
@@ -76,9 +76,10 @@ html_template = """
     <meta charset="utf-8" />
     <style>
         body { margin: 0; padding: 0; overflow: hidden; background-color: #0b0b10; font-family: sans-serif; }
-        #wrapper { display: flex; flex-direction: column; width: 100%; height: 620px; }
-        #map-container { width: 100%; height: 240px; position: relative; border-bottom: 2px solid #333; }
-        #canvas-container { width: 100%; height: 380px; position: relative; cursor: pointer; }
+        #wrapper { display: flex; flex-direction: column; width: 100%; height: 630px; }
+        #map-container { width: 100%; height: 250px; position: relative; border-bottom: 2px solid #333; }
+        #canvas-container { width: 100%; height: 380px; position: relative; cursor: grab; }
+        #canvas-container:active { cursor: grabbing; }
         #map { width: 100%; height: 100%; }
         
         .map-overlay {
@@ -107,11 +108,11 @@ html_template = """
             border-radius: 6px; font-size: 11px; border: 1px solid #00e676;
             pointer-events: none;
         }
-        #instructions {
-            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            z-index: 101; background: rgba(0, 0, 0, 0.85); color: #00e676; padding: 16px 24px;
-            border-radius: 8px; border: 2px solid #00e676; text-align: center; font-weight: bold;
-            font-size: 14px; box-shadow: 0 0 20px rgba(0, 230, 118, 0.4); pointer-events: none;
+        .guide-box {
+            position: absolute; bottom: 10px; left: 10px; z-index: 100;
+            background: rgba(0, 0, 0, 0.85); color: #00e676; padding: 6px 12px;
+            border-radius: 6px; font-size: 11px; border: 1px solid #00e676;
+            pointer-events: none;
         }
     </style>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -138,21 +139,19 @@ html_template = """
 
         <div id="canvas-container">
             <div class="roadview-nav">
-                <b>🎥 3D 로드뷰 자유 탐색 (R=__RADIUS__m, 보강재=__PIPES__개)</b>
+                <b>🎥 3D 자유 로드뷰 (R=__RADIUS__m, 보강재=__PIPES__개)</b>
             </div>
-            <div id="instructions">
-                🖱️ 화면을 클릭하여 3D 자유 로드뷰 시작<br>
-                <span style="font-size:11px; color:#fff; font-weight:normal; margin-top:4px; display:inline-block;">
-                    • <b>WASD / 화살표 키:</b> 터널 내부 전후좌우 이동<br>
-                    • <b>마우스 회전:</b> 360도 시선 회전 | <b>ESC:</b> 마우스 해제
-                </span>
+            <div class="guide-box">
+                🕹️ <b>3D 자유 이동 조종법:</b><br>
+                • <b>마우스 드래그:</b> 360도 자유 시선 회전<br>
+                • <b>WASD / 화살표 키:</b> 터널 내부 자유 이동
             </div>
         </div>
     </div>
 
     <script>
         // ======================================================================
-        // A. Leaflet 위성 지도
+        // A. Leaflet 위성 지도 & 직선/곡선 드로잉
         // ======================================================================
         var map = L.map('map').setView([37.5, 128.3], 14);
         L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
@@ -204,6 +203,10 @@ html_template = """
             var drawCoords = (currentMode === 'curved') ? getSplinePoints(points) : points;
             var color = (currentMode === 'curved') ? '#00e676' : '#ffeb3b';
             polylinePath = L.polyline(drawCoords, { color: color, weight: 5, opacity: 0.9 }).addTo(map);
+
+            if (window.rebuildTunnel3D) {
+                window.rebuildTunnel3D(currentMode === 'curved', currentRadius);
+            }
         }
 
         function initMarkers() {
@@ -232,61 +235,138 @@ html_template = """
         }
 
         // ======================================================================
-        // B. Three.js 자유 이동(FPS) 3D 로드뷰 모듈
+        // B. Three.js 자유 조종(마우스 드래그 + WASD) 3D 로드뷰
         // ======================================================================
         var scene, camera, renderer;
+        var tunnelMesh, ribGroup, pipeGroup;
         var moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
-        var isPointerLocked = false;
+        var isDragging = false;
+        var previousMousePosition = { x: 0, y: 0 };
         var yaw = 0, pitch = 0;
 
         window.addEventListener('load', function() {
             var container = document.getElementById('canvas-container');
-            var instructions = document.getElementById('instructions');
 
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x0a0a0f);
             scene.fog = new THREE.FogExp2(0x0a0a0f, 0.012);
 
             camera = new THREE.PerspectiveCamera(70, container.clientWidth / 380, 0.1, 1000);
-            camera.position.set(0, -0.2, 10); // 터널 시선 눈높이
+            camera.position.set(0, 0.5, 15); // 로드뷰 시점 높이
 
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(container.clientWidth, 380);
             renderer.setPixelRatio(window.devicePixelRatio);
             container.appendChild(renderer.domElement);
 
-            // 포인터 락(마우스 자물쇠 고정) 제어
-            container.addEventListener('click', function() {
-                container.requestPointerLock();
-            });
+            // 조명
+            var ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
+            scene.add(ambientLight);
 
-            document.addEventListener('pointerlockchange', function() {
-                if (document.pointerLockElement === container) {
-                    isPointerLocked = true;
-                    instructions.style.display = 'none';
-                } else {
-                    isPointerLocked = false;
-                    instructions.style.display = 'block';
+            for (var lz = -80; lz <= 30; lz += 15) {
+                var light = new THREE.PointLight(0xffd54f, 1.8, 30);
+                light.position.set(0, 4.0, lz);
+                scene.add(light);
+            }
+
+            ribGroup = new THREE.Group();
+            pipeGroup = new THREE.Group();
+            scene.add(ribGroup);
+            scene.add(pipeGroup);
+
+            // 3D 터널 재구성 함수
+            window.rebuildTunnel3D = function(isCurved, radius) {
+                if (tunnelMesh) scene.remove(tunnelMesh);
+                while(ribGroup.children.length > 0) ribGroup.remove(ribGroup.children[0]);
+                while(pipeGroup.children.length > 0) pipeGroup.remove(pipeGroup.children[0]);
+
+                var shape = new THREE.Shape();
+                var R = __RADIUS__;
+                var H_wall = 2.5;
+                var W_base = R * 0.95;
+
+                shape.moveTo(-W_base, -H_wall);
+                shape.lineTo(-W_base, 0);
+                for (var a = Math.PI; a >= 0; a -= Math.PI / 20) {
+                    shape.lineTo((W_base / R) * R * Math.cos(a), R * Math.sin(a));
                 }
+                shape.lineTo(W_base, -H_wall);
+                shape.lineTo(-W_base, -H_wall);
+
+                var path;
+                if (isCurved) {
+                    var bend = Math.min(0.8, 150 / radius);
+                    path = new THREE.CatmullRomCurve3([
+                        new THREE.Vector3(0, 0, 30),
+                        new THREE.Vector3(bend * 8, 0, 0),
+                        new THREE.Vector3(bend * 20, 0, -30),
+                        new THREE.Vector3(bend * 35, 0, -70)
+                    ]);
+                } else {
+                    path = new THREE.CatmullRomCurve3([
+                        new THREE.Vector3(0, 0, 30),
+                        new THREE.Vector3(0, 0, -20),
+                        new THREE.Vector3(0, 0, -70)
+                    ]);
+                }
+
+                var extrudeSettings = { steps: 80, bevelEnabled: false, extrudePath: path };
+                var tunnelGeo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+                var tunnelMat = new THREE.MeshStandardMaterial({ color: 0x424242, side: THREE.BackSide, roughness: 0.6 });
+                tunnelMesh = new THREE.Mesh(tunnelGeo, tunnelMat);
+                scene.add(tunnelMesh);
+
+                // 강지보재
+                var ribMat = new THREE.LineBasicMaterial({ color: 0xffb74d, linewidth: 3 });
+                var edges = new THREE.EdgesGeometry(tunnelGeo);
+                var ribLine = new THREE.LineSegments(edges, ribMat);
+                ribGroup.add(ribLine);
+
+                // 보강재 파이프
+                var pipeMat = new THREE.MeshBasicMaterial({ color: 0xab47bc });
+                var numPipes = __PIPES__;
+                var angleStep = (Math.PI - 0.4) / Math.max(1, (numPipes - 1));
+
+                for (var pIdx = 0; pIdx < numPipes; pIdx++) {
+                    var pAngle = 0.2 + (pIdx * angleStep);
+                    var pipeGeo = new THREE.CylinderGeometry(0.12, 0.12, 50, 8);
+                    var pipeMesh = new THREE.Mesh(pipeGeo, pipeMat);
+                    var px = (W_base + 0.3) * Math.cos(pAngle);
+                    var py = (R + 0.3) * Math.sin(pAngle);
+                    pipeMesh.position.set(px, py, -20);
+                    pipeMesh.rotation.x = Math.PI / 2;
+                    pipeGroup.add(pipeMesh);
+                }
+            };
+
+            window.rebuildTunnel3D(false, 300);
+
+            // 마우스 드래그 조종
+            container.addEventListener('mousedown', function(e) {
+                isDragging = true;
+                previousMousePosition = { x: e.clientX, y: e.clientY };
             });
 
-            // 마우스 회전에 따른 360도 시선 조종
-            document.addEventListener('mousemove', function(e) {
-                if (!isPointerLocked) return;
-                var movementX = e.movementX || 0;
-                var movementY = e.movementY || 0;
+            window.addEventListener('mousemove', function(e) {
+                if (!isDragging) return;
+                var deltaX = e.clientX - previousMousePosition.x;
+                var deltaY = e.clientY - previousMousePosition.y;
 
-                yaw -= movementX * 0.002;
-                pitch -= movementY * 0.002;
+                yaw -= deltaX * 0.003;
+                pitch -= deltaY * 0.003;
                 pitch = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, pitch));
 
                 var euler = new THREE.Euler(0, 0, 0, 'YXZ');
                 euler.x = pitch;
                 euler.y = yaw;
                 camera.quaternion.setFromEuler(euler);
+
+                previousMousePosition = { x: e.clientX, y: e.clientY };
             });
 
-            // WASD 키보드 이동 감지
+            window.addEventListener('mouseup', function() { isDragging = false; });
+
+            // WASD 이동 키
             document.addEventListener('keydown', function(e) {
                 switch (e.code) {
                     case 'KeyW': case 'ArrowUp': moveForward = true; break;
@@ -305,82 +385,23 @@ html_template = """
                 }
             });
 
-            // 조명
-            var ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
-            scene.add(ambientLight);
-
-            for (var lz = -70; lz <= 30; lz += 15) {
-                var light = new THREE.PointLight(0xffd54f, 1.8, 30);
-                light.position.set(0, 4.0, lz);
-                scene.add(light);
-            }
-
-            // 터널 Mesh 생성
-            var shape = new THREE.Shape();
-            var R = __RADIUS__;
-            var H_wall = 2.5;
-            var W_base = R * 0.95;
-
-            shape.moveTo(-W_base, -H_wall);
-            shape.lineTo(-W_base, 0);
-            for (var a = Math.PI; a >= 0; a -= Math.PI / 20) {
-                shape.lineTo((W_base / R) * R * Math.cos(a), R * Math.sin(a));
-            }
-            shape.lineTo(W_base, -H_wall);
-            shape.lineTo(-W_base, -H_wall);
-
-            var extrudeSettings = { steps: 80, depth: 100, bevelEnabled: false };
-            var tunnelGeo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-            var tunnelMat = new THREE.MeshStandardMaterial({ color: 0x424242, side: THREE.BackSide, roughness: 0.6 });
-            var tunnelMesh = new THREE.Mesh(tunnelGeo, tunnelMat);
-            tunnelMesh.position.set(0, 0, -80);
-            scene.add(tunnelMesh);
-
-            // 강지보재
-            var ribMat = new THREE.LineBasicMaterial({ color: 0xffb74d, linewidth: 3 });
-            for (var rz = -75; rz <= 20; rz += 3.5) {
-                var edges = new THREE.EdgesGeometry(tunnelGeo);
-                var ribLine = new THREE.LineSegments(edges, ribMat);
-                ribLine.position.set(0, 0, rz);
-                scene.add(ribLine);
-            }
-
-            // 보강재 파이프
-            var pipeMat = new THREE.MeshBasicMaterial({ color: 0xab47bc });
-            var numPipes = __PIPES__;
-            var angleStep = (Math.PI - 0.4) / Math.max(1, (numPipes - 1));
-
-            for (var pIdx = 0; pIdx < numPipes; pIdx++) {
-                var pAngle = 0.2 + (pIdx * angleStep);
-                var pipeGeo = new THREE.CylinderGeometry(0.12, 0.12, 45, 8);
-                var pipeMesh = new THREE.Mesh(pipeGeo, pipeMat);
-                var px = (W_base + 0.3) * Math.cos(pAngle);
-                var py = (R + 0.3) * Math.sin(pAngle);
-                pipeMesh.position.set(px, py, -20);
-                pipeMesh.rotation.x = Math.PI / 2;
-                scene.add(pipeMesh);
-            }
-
-            // 프레임 이동 업데이트 애니메이션
             var clock = new THREE.Clock();
             function animate() {
                 requestAnimationFrame(animate);
                 var delta = clock.getDelta();
-                var moveSpeed = 12.0 * delta; // 이동 속도
+                var moveSpeed = 12.0 * delta;
 
-                if (isPointerLocked) {
-                    var dir = new THREE.Vector3();
-                    camera.getWorldDirection(dir);
-                    dir.y = 0; // 평면 수평 이동 고정
-                    dir.normalize();
+                var dir = new THREE.Vector3();
+                camera.getWorldDirection(dir);
+                dir.y = 0;
+                dir.normalize();
 
-                    var sideDir = new THREE.Vector3().crossVectors(camera.up, dir).normalize();
+                var sideDir = new THREE.Vector3().crossVectors(camera.up, dir).normalize();
 
-                    if (moveForward) camera.position.addScaledVector(dir, moveSpeed);
-                    if (moveBackward) camera.position.addScaledVector(dir, -moveSpeed);
-                    if (moveLeft) camera.position.addScaledVector(sideDir, moveSpeed);
-                    if (moveRight) camera.position.addScaledVector(sideDir, -moveSpeed);
-                }
+                if (moveForward) camera.position.addScaledVector(dir, moveSpeed);
+                if (moveBackward) camera.position.addScaledVector(dir, -moveSpeed);
+                if (moveLeft) camera.position.addScaledVector(sideDir, moveSpeed);
+                if (moveRight) camera.position.addScaledVector(sideDir, -moveSpeed);
 
                 renderer.render(scene, camera);
             }
@@ -391,7 +412,7 @@ html_template = """
 </html>
 """
 
-# 파이썬 변수 치환
+# 안전한replace 치환
 station_sync_html = html_template.replace("__RADIUS__", str(active_radius)).replace("__PIPES__", str(active_pipes))
 
 # ======================================================================
