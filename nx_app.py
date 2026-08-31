@@ -6,45 +6,44 @@ import streamlit.components.v1 as components
 # 1. 페이지 기본 설정
 # ======================================================================
 st.set_page_config(
-    page_title="GTS NX 3D 거리뷰 모식도 & OK/NG 안전성 검토",
+    page_title="GTS NX 3D 정밀 터널 거리뷰 & OK/NG 검토",
     page_icon="🏢",
     layout="wide"
 )
 
-st.title("🏢 3D 거리뷰(Street View) 터널 모식화 & OK / NG 검토기")
-st.markdown("마우스로 **3D 공간 내부를 360도 탐색**하고 구조 안전성(OK/NG)을 확인하세요.")
+st.title("🏢 NATM 터널 정밀 3D 거리뷰(Street View) & OK / NG 검토기")
+st.markdown("실제 NATM 터널 단면(아치형 상반 + 평탄 하반 + 강지보재)을 마우스로 **360도 거리뷰 시점**에서 관찰하세요.")
 
 st.divider()
 
 # ======================================================================
-# 2. Three.js 내장 방식 3D 거리뷰 뷰어 HTML/JS (오류 해결 완결판)
+# 2. Three.js - 정밀 NATM 아치 터널 형상 & 거리뷰 HTML/JS
 # ======================================================================
-threejs_streetview_html = """
+threejs_natm_tunnel_html = """
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8" />
     <style>
-        body { margin: 0; padding: 0; overflow: hidden; background-color: #111118; font-family: sans-serif; }
+        body { margin: 0; padding: 0; overflow: hidden; background-color: #0b0b10; font-family: sans-serif; }
         #canvas-container { width: 100%; height: 580px; position: relative; }
         .streetview-overlay {
             position: absolute; top: 12px; left: 12px; z-index: 100;
-            background: rgba(0, 0, 0, 0.85); color: #00e676; padding: 10px 14px;
+            background: rgba(0, 0, 0, 0.88); color: #00e676; padding: 10px 14px;
             border-radius: 8px; font-size: 12px; border: 1px solid #00e676;
             box-shadow: 0 4px 10px rgba(0,0,0,0.5); pointer-events: none;
         }
         .instruction { color: #ffffff; font-size: 11px; margin-top: 4px; }
     </style>
-    <!-- 단일 검증 CDN 활용 -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
     <div id="canvas-container">
         <div class="streetview-overlay">
-            <b>🎥 3D 거리뷰(First-Person View) 모드</b>
+            <b>🎥 NATM 정밀 터널 3D 거리뷰 모드</b>
             <div class="instruction">
-                • <b>마우스 드래그:</b> 360도 시점 회전<br>
-                • <b>휠 스크롤:</b> 줌 인 / 줌 아웃 (터널 내부 진입)<br>
+                • <b>마우스 드래그:</b> 터널 내부 360도 시점 회전<br>
+                • <b>마우스 휠:</b> 터널 막장 내부로 진입 / 후퇴<br>
             </div>
         </div>
     </div>
@@ -53,36 +52,33 @@ threejs_streetview_html = """
         window.addEventListener('load', function() {
             const container = document.getElementById('canvas-container');
 
-            // 1. Scene, Camera, Renderer 생성
+            // 1. Scene, Camera, Renderer
             const scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x111118);
-            scene.fog = new THREE.FogExp2(0x111118, 0.015);
+            scene.background = new THREE.Color(0x0a0a0f);
+            scene.fog = new THREE.FogExp2(0x0a0a0f, 0.012);
 
-            const camera = new THREE.PerspectiveCamera(75, container.clientWidth / 580, 0.1, 1000);
+            const camera = new THREE.PerspectiveCamera(70, container.clientWidth / 580, 0.1, 1000);
             const renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(container.clientWidth, 580);
             renderer.setPixelRatio(window.devicePixelRatio);
             container.appendChild(renderer.domElement);
 
-            // 2. 외부 라이브러리 없이 자체 마우스 회전/줌 조종 모듈 구현
+            // 2. 거리뷰 마우스 탐색 컨트롤
             let isDragging = false;
             let previousMousePosition = { x: 0, y: 0 };
-            let cameraRadius = 25;
+            let cameraRadius = 18;
             let cameraTheta = 0;
-            let cameraPhi = Math.PI / 4;
+            let cameraPhi = Math.PI / 2.3;
 
             function updateCameraPosition() {
                 camera.position.x = cameraRadius * Math.sin(cameraPhi) * Math.sin(cameraTheta);
-                camera.position.y = cameraRadius * Math.cos(cameraPhi) + 1.5;
+                camera.position.y = cameraRadius * Math.cos(cameraPhi) + 1.2;
                 camera.position.z = cameraRadius * Math.sin(cameraPhi) * Math.cos(cameraTheta) - 20;
-                camera.lookAt(0, 0, -20);
+                camera.lookAt(0, 1.0, -35);
             }
             updateCameraPosition();
 
-            renderer.domElement.addEventListener('mousedown', function(e) {
-                isDragging = true;
-            });
-
+            renderer.domElement.addEventListener('mousedown', function() { isDragging = true; });
             renderer.domElement.addEventListener('mousemove', function(e) {
                 if (isDragging) {
                     const deltaX = e.clientX - previousMousePosition.x;
@@ -96,69 +92,85 @@ threejs_streetview_html = """
                 }
                 previousMousePosition = { x: e.clientX, y: e.clientY };
             });
-
-            window.addEventListener('mouseup', function() {
-                isDragging = false;
-            });
-
+            window.addEventListener('mouseup', function() { isDragging = false; });
             renderer.domElement.addEventListener('wheel', function(e) {
-                cameraRadius += e.deltaY * 0.02;
-                cameraRadius = Math.max(2, Math.min(60, cameraRadius));
+                cameraRadius += e.deltaY * 0.025;
+                cameraRadius = Math.max(-40, Math.min(50, cameraRadius));
                 updateCameraPosition();
             });
 
-            // 3. 조명 (Light)
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+            // 3. 조명 (터널 조명 및 비상등 표현)
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
             scene.add(ambientLight);
 
-            const pointLight = new THREE.PointLight(0xffeb3b, 1.5, 60);
-            pointLight.position.set(0, 5, -10);
-            scene.add(pointLight);
+            for (let lz = -70; lz <= 10; lz += 20) {
+                const light = new THREE.PointLight(0xffd54f, 1.2, 25);
+                light.position.set(0, 4.5, lz);
+                scene.add(light);
+            }
 
-            // 4. 지표면 그리드
-            const gridHelper = new THREE.GridHelper(100, 40, 0x444444, 0x222222);
-            gridHelper.position.y = -3;
-            scene.add(gridHelper);
+            // 4. NATM 터널 2D 단면 형상 생성 (아치 상반 + 수직 측벽 + 하반 평탄)
+            const shape = new THREE.Shape();
+            const R = 6.2;       # 상반 아치 반지름
+            const H_wall = 2.5;  # 측벽 높이
+            const W_base = 6.0;  # 바닥 반폭
 
-            // 5. 3D 터널 라이너 (아치형)
-            const tunnelRadius = 6.5;
-            const tunnelLength = 80;
-            const tunnelGeo = new THREE.CylinderGeometry(tunnelRadius, tunnelRadius, tunnelLength, 32, 40, true, 0, Math.PI);
+            shape.moveTo(-W_base, -H_wall);
+            shape.lineTo(-W_base, 0);
+            
+            // 아치 곡선 생성 (상반 마굴)
+            for (let a = Math.PI; a >= 0; a -= Math.PI / 20) {
+                let ax = (W_base / R) * R * Math.cos(a);
+                let ay = (R * Math.sin(a));
+                shape.lineTo(ax, ay);
+            }
+            shape.lineTo(W_base, -H_wall);
+            shape.lineTo(-W_base, -H_wall); // 바닥 인버트 closed
+
+            // 5. 3D 돌출 (ExtrudeGeometry)로 압출 터널 보디 생성
+            const extrudeSettings = {
+                steps: 60,
+                depth: 80,
+                bevelEnabled: false
+            };
+
+            const tunnelGeo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
             const tunnelMat = new THREE.MeshStandardMaterial({
-                color: 0x37474f,
-                side: THREE.DoubleSide,
-                roughness: 0.6
+                color: 0x424242,
+                side: THREE.BackSide, // 터널 내부가 보이도록 설정
+                roughness: 0.8
             });
+
             const tunnelMesh = new THREE.Mesh(tunnelGeo, tunnelMat);
-            tunnelMesh.rotation.x = Math.PI / 2;
-            tunnelMesh.position.set(0, 0, -20);
+            tunnelMesh.position.set(0, 0, -60);
             scene.add(tunnelMesh);
 
-            // 터널 격자 와이어프레임
-            const wireframeGeo = new THREE.WireframeGeometry(tunnelGeo);
-            const wireframeMat = new THREE.LineBasicMaterial({ color: 0x2196f3 });
-            const wireframe = new THREE.LineSegments(wireframeGeo, wireframeMat);
-            wireframe.rotation.x = Math.PI / 2;
-            wireframe.position.set(0, 0, -20);
-            scene.add(wireframe);
+            // 6. 강지보재(H-Beam Steel Rib) 링 격자 배치
+            const ribMat = new THREE.LineBasicMaterial({ color: 0xffb74d, linewidth: 3 });
+            for (let rz = -55; rz <= 15; rz += 3.5) {
+                const edges = new THREE.EdgesGeometry(tunnelGeo);
+                const ribLine = new THREE.LineSegments(edges, ribMat);
+                ribLine.position.set(0, 0, rz);
+                scene.add(ribLine);
+            }
 
-            // 6. 3D 록볼트 방사형 보강재 (Red Rods)
+            // 7. 방사형 록볼트 (Rockbolts - D25 Steel Rods)
             const boltMat = new THREE.MeshBasicMaterial({ color: 0xff1744 });
-            for (let z = -55; z <= 15; z += 6) {
-                for (let angle = 0.3; angle <= Math.PI - 0.3; angle += 0.45) {
-                    const boltGeo = new THREE.CylinderGeometry(0.1, 0.1, 3.5, 8);
+            for (let bz = -55; bz <= 15; bz += 4.5) {
+                for (let angle = 0.2; angle <= Math.PI - 0.2; angle += 0.35) {
+                    const boltGeo = new THREE.CylinderGeometry(0.08, 0.08, 3.8, 8);
                     const bolt = new THREE.Mesh(boltGeo, boltMat);
-                    
-                    const bx = (tunnelRadius + 1.75) * Math.cos(angle);
-                    const by = (tunnelRadius + 1.75) * Math.sin(angle);
-                    
-                    bolt.position.set(bx, by - 3, z);
+
+                    const bx = (W_base + 1.9) * Math.cos(angle);
+                    const by = (R + 1.9) * Math.sin(angle);
+
+                    bolt.position.set(bx, by, bz);
                     bolt.rotation.z = angle - Math.PI / 2;
                     scene.add(bolt);
                 }
             }
 
-            // 7. 애니메이션 루프
+            // 8. 애니메이션 루프
             function animate() {
                 requestAnimationFrame(animate);
                 renderer.render(scene, camera);
@@ -176,7 +188,7 @@ threejs_streetview_html = """
 def evaluate_stability(depth=35.0, gamma=23.0, k0=0.5, E_rock=1500000.0):
     sigma_v = gamma * depth
     sigma_h = k0 * sigma_v
-    radius = 6.5
+    radius = 6.2
     v = 0.25
 
     u_crown = ((1 + v) * radius * sigma_v / E_rock) * 1000.0
@@ -201,13 +213,13 @@ def evaluate_stability(depth=35.0, gamma=23.0, k0=0.5, E_rock=1500000.0):
     }
 
 # ======================================================================
-# 4. Streamlit 화면 레이아웃
+# 4. Streamlit 레이아웃
 # ======================================================================
 col_view, col_result = st.columns([1.8, 1.2])
 
 with col_view:
-    st.subheader("🎥 3D 거리뷰(Street View) 실시간 모식도")
-    components.html(threejs_streetview_html, height=600)
+    st.subheader("🎥 NATM 아치 정밀 3D 거리뷰")
+    components.html(threejs_natm_tunnel_html, height=600)
 
 with col_result:
     st.subheader("🚥 종합 안전성 OK / NG 판정")
@@ -217,7 +229,6 @@ with col_result:
     
     eval_res = evaluate_stability(depth=depth, E_rock=e_rock)
 
-    # 최종 상태 판정 메인 배너
     if "OK" in eval_res["total"]:
         st.success(f"### 🎉 최종 안전성 결과: {eval_res['total']}")
     else:
@@ -226,30 +237,26 @@ with col_result:
     st.divider()
     st.markdown("### 📋 4대 핵심 항목 OK / NG 현황")
 
-    # 1. 천단변위
     if eval_res["crown"] == "OK":
         st.success("🟢 **1. 천단변위:** OK (기준 만족)")
     else:
         st.error("🔴 **1. 천단변위:** NG (허용치 초과)")
 
-    # 2. 내공변위
     if eval_res["wall"] == "OK":
         st.success("🟢 **2. 내공변위:** OK (기준 만족)")
     else:
         st.error("🔴 **2. 내공변위:** NG (허용치 초과)")
 
-    # 3. 숏크리트 휨응력
     if eval_res["shotcrete"] == "OK":
         st.success("🟢 **3. 숏크리트 휨압축응력:** OK (기준 만족)")
     else:
         st.error("🔴 **3. 숏크리트 휨압축응력:** NG (파괴 위험)")
 
-    # 4. 록볼트 축력
     if eval_res["rockbolt"] == "OK":
         st.success("🟢 **4. 록볼트 최대축력:** OK (기준 만족)")
     else:
         st.error("🔴 **4. 록볼트 최대축력:** NG (항복 위험)")
 
     st.divider()
-    if st.button("🚀 OK/NG 검토서 출력"):
+    if st.button("🚀 OK/NG 검토서 도출"):
         st.info("OK/NG 판정 데이터가 GTS NX 검토 일지 포맷으로 도출되었습니다.")
