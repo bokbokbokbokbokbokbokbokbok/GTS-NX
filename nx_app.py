@@ -14,13 +14,13 @@ except ModuleNotFoundError:
 # 1. 페이지 기본 설정
 # ======================================================================
 st.set_page_config(
-    page_title="GTS NX 스타일 ZXY 축 3D 뷰어 & 측점 DXF 연동기",
+    page_title="GTS NX 스타일 ZXY 축 3D 뷰어 & 법선방향 록볼트",
     page_icon="🧊",
     layout="wide"
 )
 
-st.title("🧊 GTS NX 스타일 ZXY 축 3D 뷰어 & 측점 DXF 연동기")
-st.markdown("CAE 해석 프로그램처럼 **마우스 드래그로 ZXY 3차원 축을 자유롭게 회전·이동·확대**하며 지반 및 터널 유한요소망을 검토하세요.")
+st.title("🧊 GTS NX 스타일 ZXY 축 3D 뷰어 (법선방향 록볼트 적용)")
+st.markdown("록볼트가 터널 마굴면의 **법선 방향(수직)으로 관통 배치**되도록 보완했습니다. 마우스 드래그로 ZXY 축을 자유롭게 회전해보세요.")
 
 st.divider()
 
@@ -66,7 +66,7 @@ active_radius = st.session_state.station_list[0]['radius']
 active_pipes = st.session_state.station_list[0]['pipes']
 
 # ======================================================================
-# 3. Leaflet 위성 지도 + Three.js OrbitControls (ZXY 축 자유 회전) HTML/JS
+# 3. Leaflet 위성 지도 + Three.js (법선방향 록볼트 3D) HTML/JS
 # ======================================================================
 html_template = """
 <!DOCTYPE html>
@@ -121,6 +121,7 @@ html_template = """
 </head>
 <body>
     <div id="wrapper">
+        <!-- 1. 지도 영역 -->
         <div id="map-container">
             <div id="map"></div>
             <div class="map-overlay">
@@ -137,15 +138,15 @@ html_template = """
             </div>
         </div>
 
+        <!-- 2. GTS NX 스타일 ZXY 자유 회전 3D FEA 뷰어 -->
         <div id="canvas-container">
             <div class="roadview-nav">
-                <b>🧊 GTS NX 스타일 ZXY 3D 뷰어 (R=__RADIUS__m, 보강재=__PIPES__개)</b>
+                <b>🧊 GTS NX 3D 뷰어 (법선방향 록볼트 🔴 관통 시각화)</b>
             </div>
             <div class="guide-box">
-                🕹️ <b>GTS NX 3D 조종법:</b><br>
-                • <b>좌클릭 드래그:</b> ZXY 3차원 축 자유 회전<br>
-                • <b>우클릭 드래그:</b> 평면 화면 이동(Pan)<br>
-                • <b>마우스 휠:</b> 3D 공간 확대 / 축소(Zoom)
+                🕹️ <b>3D 록볼트 배치:</b><br>
+                • 🔴 <b>록볼트 (D25 Steel Rods):</b> 마굴면 수직(법선) 방향 암반 관통<br>
+                • 🟡 <b>강지보재 (H-Beam Rib):</b> 종방향 아치 격자 배치
             </div>
         </div>
     </div>
@@ -236,10 +237,10 @@ html_template = """
         }
 
         // ======================================================================
-        // B. GTS NX 스타일 Three.js OrbitControls (ZXY 3차원 축 조종)
+        // B. GTS NX 스타일 Three.js OrbitControls & 법선 록볼트 모듈
         // ======================================================================
         var scene, camera, renderer, controls;
-        var tunnelMesh, ribGroup, pipeGroup, axesHelper, groundMesh;
+        var tunnelMesh, ribGroup, boltGroup, groundMesh, axesHelper;
 
         window.addEventListener('load', function() {
             var container = document.getElementById('canvas-container');
@@ -249,14 +250,13 @@ html_template = """
             scene.fog = new THREE.FogExp2(0x0b0b12, 0.008);
 
             camera = new THREE.PerspectiveCamera(60, container.clientWidth / 400, 0.1, 1000);
-            camera.position.set(25, 20, 35); // 쿼터뷰 아이소메트릭 시점
+            camera.position.set(22, 18, 30);
 
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(container.clientWidth, 400);
             renderer.setPixelRatio(window.devicePixelRatio);
             container.appendChild(renderer.domElement);
 
-            // OrbitControls 연결 (ZXY 자유 회전)
             controls = new THREE.OrbitControls(camera, renderer.domElement);
             controls.enableDamping = true;
             controls.dampingFactor = 0.05;
@@ -286,28 +286,29 @@ html_template = """
                 color: 0x3e3c38,
                 wireframe: true,
                 transparent: true,
-                opacity: 0.25
+                opacity: 0.2
             });
             groundMesh = new THREE.Mesh(groundGeo, groundMat);
             groundMesh.position.set(0, 0, -20);
             scene.add(groundMesh);
 
             ribGroup = new THREE.Group();
-            pipeGroup = new THREE.Group();
+            boltGroup = new THREE.Group();
             scene.add(ribGroup);
-            scene.add(pipeGroup);
+            scene.add(boltGroup);
 
-            // 3D 터널 재구성 함수
+            // 3D 터널 및 법선방향 록볼트 재구성 함수
             window.rebuildTunnel3D = function(isCurved, radius) {
                 if (tunnelMesh) scene.remove(tunnelMesh);
                 while(ribGroup.children.length > 0) ribGroup.remove(ribGroup.children[0]);
-                while(pipeGroup.children.length > 0) pipeGroup.remove(pipeGroup.children[0]);
+                while(boltGroup.children.length > 0) boltGroup.remove(boltGroup.children[0]);
 
-                var shape = new THREE.Shape();
                 var R = __RADIUS__;
                 var H_wall = 2.5;
                 var W_base = R * 0.95;
 
+                // 2D 단면
+                var shape = new THREE.Shape();
                 shape.moveTo(-W_base, -H_wall);
                 shape.lineTo(-W_base, 0);
                 for (var a = Math.PI; a >= 0; a -= Math.PI / 20) {
@@ -337,9 +338,8 @@ html_template = """
                 var tunnelGeo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
                 var tunnelMat = new THREE.MeshStandardMaterial({
                     color: 0x55555e,
-                    side: THREE.DoubleSide,
-                    roughness: 0.5,
-                    metalness: 0.2
+                    side: THREE.BackSide,
+                    roughness: 0.5
                 });
                 tunnelMesh = new THREE.Mesh(tunnelGeo, tunnelMat);
                 scene.add(tunnelMesh);
@@ -350,20 +350,42 @@ html_template = """
                 var ribLine = new THREE.LineSegments(edges, ribMat);
                 ribGroup.add(ribLine);
 
-                // 보강재 파이프
-                var pipeMat = new THREE.MeshStandardMaterial({ color: 0xab47bc, metalness: 0.8 });
-                var numPipes = __PIPES__;
-                var angleStep = (Math.PI - 0.4) / Math.max(1, (numPipes - 1));
+                // ★ 법선(Normal Vector) 방향 방사형 록볼트 관통 연산 ★
+                var boltLength = 3.8; // 록볼트 시공 길이 (m)
+                var boltMat = new THREE.MeshStandardMaterial({ color: 0xff1744, metalness: 0.8 }); // 빨간색 록볼트
+                var numBoltsPerRing = __PIPES__;
+                var zIntervals = [-50, -35, -20, -5, 10]; // 종방향 배치 위치
 
-                for (var pIdx = 0; pIdx < numPipes; pIdx++) {
-                    var pAngle = 0.2 + (pIdx * angleStep);
-                    var pipeGeo = new THREE.CylinderGeometry(0.15, 0.15, 55, 8);
-                    var pipeMesh = new THREE.Mesh(pipeGeo, pipeMat);
-                    var px = (W_base + 0.3) * Math.cos(pAngle);
-                    var py = (R + 0.3) * Math.sin(pAngle);
-                    pipeMesh.position.set(px, py, -20);
-                    pipeMesh.rotation.x = Math.PI / 2;
-                    pipeGroup.add(pipeMesh);
+                for (var bzIdx = 0; bzIdx < zIntervals.length; bzIdx++) {
+                    var bz = zIntervals[bzIdx];
+
+                    // 상반 아치 곡선을 따라 법선(Normal) 방향 계산
+                    for (var bIdx = 0; bIdx < numBoltsPerRing; bIdx++) {
+                        var angle = 0.2 + (bIdx * (Math.PI - 0.4) / Math.max(1, numBoltsPerRing - 1));
+                        
+                        // 굴착 표면 위치 (Surface Point)
+                        var sx = W_base * Math.cos(angle);
+                        var sy = R * Math.sin(angle);
+
+                        // 법선 벡터 (Outward Normal Vector)
+                        var nx = Math.cos(angle);
+                        var ny = Math.sin(angle);
+
+                        // 록볼트 기둥 Mesh 생성
+                        var boltGeo = new THREE.CylinderGeometry(0.1, 0.1, boltLength, 8);
+                        var boltMesh = new THREE.Mesh(boltGeo, boltMat);
+
+                        // 표면 중심점 계산 및 암반 관통 위치 배치
+                        var midX = sx + (nx * boltLength / 2);
+                        var midY = sy + (ny * boltLength / 2);
+
+                        boltMesh.position.set(midX, midY, bz);
+
+                        // 록볼트 축을 표면의 법선 방향(Z축 회전)으로 정렬
+                        boltMesh.rotation.z = angle - Math.PI / 2;
+
+                        boltGroup.add(boltMesh);
+                    }
                 }
             };
 
@@ -371,7 +393,7 @@ html_template = """
 
             function animate() {
                 requestAnimationFrame(animate);
-                controls.update(); // OrbitControls 관성 프레임 업데이트
+                controls.update();
                 renderer.render(scene, camera);
             }
             animate();
@@ -433,7 +455,7 @@ with col_input:
                 item['radius'] = parsed['radius']
                 item['pipes'] = parsed['pipes']
                 item['dxf_name'] = uploaded_dxf.name
-                st.success(f"✅ {uploaded_dxf.name} 연결 완료 (R={item['radius']}m, 보강재 {item['pipes']}개 감지 ➔ 3D 연동 완료)")
+                st.success(f"✅ {uploaded_dxf.name} 연결 완료 (R={item['radius']}m, 록볼트 {item['pipes']}개 감지 ➔ 3D 연동 완료)")
             else:
                 st.info(f"📄 현재 연결된 DXF: `{item['dxf_name']}`")
 
@@ -458,4 +480,3 @@ with col_input:
     st.divider()
     if st.button("🚀 측점별 DXF 연동 GTS NX / PLAXIS MCT 도출"):
         st.success("타이핑 입력된 측점과 DXF 도면 데이터가 3D 수치해석 파일로 도출되었습니다!")
-        
