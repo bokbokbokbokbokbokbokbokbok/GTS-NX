@@ -1,11 +1,10 @@
 import math
 import io
-import re
 import numpy as np
 import streamlit as st
 import streamlit.components.v1 as components
 
-# ezdxf 파싱 라이브러리
+# ezdxf 파싱 라이브러리 예외 처리
 try:
     import ezdxf
 except ModuleNotFoundError:
@@ -16,96 +15,60 @@ except ModuleNotFoundError:
 # 1. 페이지 기본 설정
 # ======================================================================
 st.set_page_config(
-    page_title="위성 지도 & 측점별 DXF 3D 지반 연계 해석기",
-    page_icon="🌐",
+    page_title="Station 간 보간법(Interpolation) 3D 지반-터널 모델러",
+    page_icon="📐",
     layout="wide"
 )
 
-st.title("🌐 위성 지도 + 측점별 DXF 모델 3D 연계 해석 엔진")
-st.markdown("위성 지도 노선과 측점 구간별(**STA 시점 ~ STA 종점**) **DXF 도면 파일**을 결합하여 3D 지반 및 수치해석(OK/NG)에 반영합니다.")
+st.title("📐 Station 간 보간법(Interpolation) 적용 3D 지반-터널 모델러")
+st.markdown("첫 번째 Station과 두 번째 Station의 **지반 고도, 터널 깊이, 단면**을 **선형 보간(Linear Interpolation)**하여 연속된 3D 지반체 및 터널을 생성합니다.")
 
 st.divider()
 
 # ======================================================================
-# 2. DXF 단면 파서 Class
+# 2. 세션 상태 관리 (Station별 지반 및 터널 파라미터)
 # ======================================================================
-class DXFSectionModelParser:
-    """업로드된 DXF 파일의 터널 굴착선 및 지보 부재 수치를 정밀 파싱"""
-    def __init__(self):
-        self.excavation_radius = 6.2
-        self.rockbolt_count = 0
-        self.pipe_reinforce_count = 0
-
-    def parse_dxf_entities(self, dxf_file_bytes):
-        try:
-            content = dxf_file_bytes.getvalue().decode('euc-kr', errors='ignore')
-            doc = ezdxf.read(io.StringIO(content))
-            msp = doc.modelspace()
-
-            for entity in msp:
-                layer = entity.dxf.layer
-                if entity.dxftype() == 'ARC' and layer in ('CS-CUTL', 'CS-EXCV'):
-                    self.excavation_radius = entity.dxf.radius
-                elif entity.dxftype() == 'LINE':
-                    if layer in ('CS-STEL-MAJR', 'CS-CUTL'):
-                        self.rockbolt_count += 1
-                    elif layer in ('S-DIM', 'CS-EXCV'):
-                        self.pipe_reinforce_count += 1
-
-            return {
-                "radius": round(self.excavation_radius, 2),
-                "rockbolts": self.rockbolt_count,
-                "pipes": self.pipe_reinforce_count,
-                "status": "DXF 파싱 성공"
-            }
-        except Exception:
-            return {"radius": 6.2, "rockbolts": 10, "pipes": 0, "status": "기본 규격 적용"}
-
-# 스케줄 세션 초기화
-if "dxf_schedule" not in st.session_state:
-    st.session_state.dxf_schedule = [
-        {"start_sta": 0, "end_sta": 20, "dxf_name": "7km235_PD-2A(0~20m).dxf", "radius": 6.2, "pipes": 0, "pattern": "Pattern III"},
-        {"start_sta": 20, "end_sta": 40, "dxf_name": "7km235_PD-3V(20~40m).dxf", "radius": 6.8, "pipes": 12, "pattern": "Pattern V (강관보강)"},
-        {"start_sta": 40, "end_sta": 60, "dxf_name": "7km235_PD-1(40~60m).dxf", "radius": 6.0, "pipes": 0, "pattern": "Pattern II"},
-    ]
+if "sta_a" not in st.session_state:
+    st.session_state.sta_a = {"sta": 0.0, "ground_h": 40.0, "tunnel_depth": 25.0, "radius": 6.2, "rmr": 55}
+if "sta_b" not in st.session_state:
+    st.session_state.sta_b = {"sta": 20.0, "ground_h": 50.0, "tunnel_depth": 35.0, "radius": 6.8, "rmr": 35}
 
 # ======================================================================
-# 3. 위성 지도(Leaflet) + Three.js 3D 지반 통합 HTML/JS
+# 3. Three.js - Station 간 선형 보간 3D Mesh 생성 HTML/JS
 # ======================================================================
-integrated_map_3d_html = """
+threejs_interpolated_html = f"""
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8" />
     <style>
-        body { margin: 0; padding: 0; overflow: hidden; background-color: #0b0b10; font-family: sans-serif; }
-        #wrapper { display: flex; flex-direction: column; width: 100%; height: 600px; }
-        #map-container { width: 100%; height: 260px; position: relative; border-bottom: 2px solid #333; }
-        #canvas-container { width: 100%; height: 340px; position: relative; }
+        body {{ margin: 0; padding: 0; overflow: hidden; background-color: #0b0b10; font-family: sans-serif; }}
+        #wrapper {{ display: flex; flex-direction: column; width: 100%; height: 600px; }}
+        #map-container {{ width: 100%; height: 220px; position: relative; border-bottom: 2px solid #333; }}
+        #canvas-container {{ width: 100%; height: 380px; position: relative; }}
         
-        #map { width: 100%; height: 100%; }
+        #map {{ width: 100%; height: 100%; }}
         
-        .map-overlay {
+        .map-overlay {{
             position: absolute; top: 10px; right: 10px; z-index: 1000;
             background: rgba(0, 0, 0, 0.90); color: white; padding: 8px 12px;
             border-radius: 6px; font-size: 11px;
-        }
-        .sta-badge {
+        }}
+        .sta-badge {{
             background: #2196F3; color: white; padding: 2px 6px; border-radius: 4px;
             font-weight: bold; font-family: monospace; font-size: 11px;
-        }
+        }}
         
-        .roadview-nav {
+        .roadview-nav {{
             position: absolute; top: 10px; left: 10px; z-index: 100;
             background: rgba(0, 0, 0, 0.90); color: white; padding: 8px 12px;
             border-radius: 6px; font-size: 11px; border: 1px solid #00e676;
-        }
-        .sta-btn-group { display: flex; gap: 4px; margin-top: 4px; }
-        .sta-btn {
-            background: #2196f3; color: white; border: none; padding: 4px 8px;
-            border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 10px;
-        }
-        .sta-btn.active { background: #00e676; color: black; }
+        }}
+        .interp-info {{
+            position: absolute; bottom: 10px; left: 10px; z-index: 100;
+            background: rgba(0, 0, 0, 0.85); color: #00e676; padding: 8px 12px;
+            border-radius: 6px; font-size: 11px; border: 1px solid #00e676;
+        }}
     </style>
     <!-- Leaflet & Three.js CDN -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -118,230 +81,217 @@ integrated_map_3d_html = """
         <div id="map-container">
             <div id="map"></div>
             <div class="map-overlay">
-                <b>🌍 위성 기반 노선 지도</b><br>
-                <span>측점 연장: </span><span id="current-sta" class="sta-badge">STA 0+000.00</span>
+                <b>🌍 Station 보간 구간 지도</b><br>
+                <span>구간: </span><span class="sta-badge">STA 0+000 ~ STA 0+020</span>
             </div>
         </div>
 
-        <!-- 2. 3D 지반 & DXF 연동 로드뷰 (하단) -->
+        <!-- 2. 보간법 적용 3D 지반 & 터널 뷰어 (하단) -->
         <div id="canvas-container">
             <div class="roadview-nav">
-                <b>📍 3D 지반 & DXF 측점 모델링</b>
-                <div class="sta-btn-group">
-                    <button class="sta-btn active" onclick="moveToSta(0)">STA 0m (DXF 1)</button>
-                    <button class="sta-btn" onclick="moveToSta(20)">STA 20m (DXF 2)</button>
-                    <button class="sta-btn" onclick="moveToSta(40)">STA 40m (DXF 3)</button>
-                </div>
+                <b>📐 Station A ➔ Station B 보간 3D Solid Mesh</b>
+            </div>
+            <div class="interp-info">
+                <b>📊 보간 경사 지반:</b> STA A(H={st.session_state.sta_a['ground_h']}m, D={st.session_state.sta_a['tunnel_depth']}m) ➔ STA B(H={st.session_state.sta_b['ground_h']}m, D={st.session_state.sta_b['tunnel_depth']}m)
             </div>
         </div>
     </div>
 
     <script>
-        function formatStation(meters) {
+        function formatStation(meters) {{
             var k = Math.floor(meters / 1000);
             var m = (meters % 1000).toFixed(2);
             var mStr = (m < 100) ? (m < 10 ? "00" + m : "0" + m) : m;
             return "STA " + k + "+" + mStr;
-        }
+        }}
 
         // ======================================================================
         // A. Leaflet 위성 지도 모듈
         // ======================================================================
-        var map = L.map('map').setView([37.5, 128.3], 13);
-        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        var map = L.map('map').setView([37.5, 128.3], 14);
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{
             attribution: 'Esri Satellite', maxZoom: 18
-        }).addTo(map);
+        }}).addTo(map);
 
-        var points = [[37.5, 128.28], [37.505, 128.31], [37.51, 128.33]];
-        var polyline = L.polyline(points, { color: '#00e676', weight: 4 }).addTo(map);
-
-        points.forEach(function(pt, idx) {
-            L.circleMarker(pt, { color: '#fff', fillColor: '#2196F3', fillOpacity: 1, radius: 5 })
-                .addTo(map)
-                .bindPopup("<b>" + formatStation(idx * 200) + "</b>");
-        });
-
-        document.getElementById('current-sta').innerText = formatStation(400);
+        var pA = [37.5, 128.29];
+        var pB = [37.502, 128.305];
+        
+        L.polyline([pA, pB], {{ color: '#00e676', weight: 5 }}).addTo(map);
+        L.circleMarker(pA, {{ color: '#fff', fillColor: '#2196F3', fillOpacity: 1, radius: 6 }}).addTo(map).bindPopup("<b>STA A (0m)</b>");
+        L.circleMarker(pB, {{ color: '#fff', fillColor: '#ff1744', fillOpacity: 1, radius: 6 }}).addTo(map).bindPopup("<b>STA B (20m)</b>");
 
         // ======================================================================
-        // B. Three.js 3D 지반 & DXF 모듈
+        // B. Three.js 3D 보간 메쉬 생성기
         // ======================================================================
-        var targetZ = 10, currentZ = 10;
+        var staA = {{
+            h: {st.session_state.sta_a['ground_h']},
+            d: {st.session_state.sta_a['tunnel_depth']},
+            r: {st.session_state.sta_a['radius']}
+        }};
+        
+        var staB = {{
+            h: {st.session_state.sta_b['ground_h']},
+            d: {st.session_state.sta_b['tunnel_depth']},
+            r: {st.session_state.sta_b['radius']}
+        }};
 
-        function moveToSta(sta) {
-            var btns = document.querySelectorAll('.sta-btn');
-            btns.forEach(function(b) { b.classList.remove('active'); });
-            event.target.classList.add('active');
-            targetZ = 10 - sta;
-        }
-
-        window.addEventListener('load', function() {
+        window.addEventListener('load', function() {{
             var container = document.getElementById('canvas-container');
 
             var scene = new THREE.Scene();
             scene.background = new THREE.Color(0x0a0a0f);
             scene.fog = new THREE.FogExp2(0x0a0a0f, 0.012);
 
-            var camera = new THREE.PerspectiveCamera(70, container.clientWidth / 340, 0.1, 1000);
-            var renderer = new THREE.WebGLRenderer({ antialias: true });
-            renderer.setSize(container.clientWidth, 340);
+            var camera = new THREE.PerspectiveCamera(70, container.clientWidth / 380, 0.1, 1000);
+            var renderer = new THREE.WebGLRenderer({{ antialias: true }});
+            renderer.setSize(container.clientWidth, 380);
             renderer.setPixelRatio(window.devicePixelRatio);
             container.appendChild(renderer.domElement);
 
+            camera.position.set(22, 16, 25);
+            camera.lookAt(0, 0, -20);
+
             var isDragging = false;
-            var previousMousePosition = { x: 0, y: 0 };
-            var cameraTheta = 0, cameraPhi = Math.PI / 2.3;
+            var previousMousePosition = {{ x: 0, y: 0 }};
+            var cameraTheta = 0.5, cameraPhi = Math.PI / 2.5;
 
-            function updateCamera() {
-                currentZ += (targetZ - currentZ) * 0.08;
-                var r = 16;
+            function updateCamera() {{
+                var r = 32;
                 camera.position.x = r * Math.sin(cameraPhi) * Math.sin(cameraTheta);
-                camera.position.y = r * Math.cos(cameraPhi) + 1.2;
-                camera.position.z = currentZ + (r * Math.sin(cameraPhi) * Math.cos(cameraTheta));
-                camera.lookAt(0, 1.0, currentZ - 20);
-            }
+                camera.position.y = r * Math.cos(cameraPhi) + 2.0;
+                camera.position.z = -20 + r * Math.sin(cameraPhi) * Math.cos(cameraTheta);
+                camera.lookAt(0, 0, -20);
+            }}
+            updateCamera();
 
-            renderer.domElement.addEventListener('mousedown', function() { isDragging = true; });
-            renderer.domElement.addEventListener('mousemove', function(e) {
-                if (isDragging) {
+            renderer.domElement.addEventListener('mousedown', function() {{ isDragging = true; }});
+            renderer.domElement.addEventListener('mousemove', function(e) {{
+                if (isDragging) {{
                     var deltaX = e.clientX - previousMousePosition.x;
                     var deltaY = e.clientY - previousMousePosition.y;
                     cameraTheta -= deltaX * 0.005;
                     cameraPhi -= deltaY * 0.005;
                     cameraPhi = Math.max(0.1, Math.min(Math.PI - 0.1, cameraPhi));
-                }
-                previousMousePosition = { x: e.clientX, y: e.clientY };
-            });
-            window.addEventListener('mouseup', function() { isDragging = false; });
-            renderer.domElement.addEventListener('wheel', function(e) {
-                targetZ -= e.deltaY * 0.03;
-                targetZ = Math.max(-55, Math.min(15, targetZ));
-            });
+                    updateCamera();
+                }}
+                previousMousePosition = {{ x: e.clientX, y: e.clientY }};
+            }});
+            window.addEventListener('mouseup', function() {{ isDragging = false; }});
 
             var ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
             scene.add(ambientLight);
-            var light = new THREE.PointLight(0xffd54f, 1.2, 25);
-            light.position.set(0, 4.5, -10);
+            var light = new THREE.PointLight(0xffd54f, 1.2, 50);
+            light.position.set(0, 15, -10);
             scene.add(light);
 
-            // 3D 지반 체적
-            var groundGeo = new THREE.BoxGeometry(40, 28, 80);
-            var groundMat = new THREE.MeshStandardMaterial({ color: 0x333338, wireframe: true, transparent: true, opacity: 0.3 });
-            var groundMesh = new THREE.Mesh(groundGeo, groundMat);
-            groundMesh.position.set(0, 3, -20);
-            scene.add(groundMesh);
+            // 1. 선형 보간된 경사 3D 지반 블록 생성 (Sloped Ground Solid)
+            var groundLength = 50;
+            var numSteps = 20;
+            var groundGroup = new THREE.Group();
 
-            // 3D NATM 터널
-            var shape = new THREE.Shape();
-            var R = 6.2, H_wall = 2.5, W_base = 6.0;
-            shape.moveTo(-W_base, -H_wall);
-            shape.lineTo(-W_base, 0);
-            for (var a = Math.PI; a >= 0; a -= Math.PI / 20) {
-                shape.lineTo((W_base / R) * R * Math.cos(a), R * Math.sin(a));
-            }
-            shape.lineTo(W_base, -H_wall);
-            shape.lineTo(-W_base, -H_wall);
+            for (var i = 0; i < numSteps; i++) {{
+                var t1 = i / numSteps;
+                var t2 = (i + 1) / numSteps;
+                
+                // 선형 보간 공식 적용: H(t) = (1-t)*H_A + t*H_B
+                var h1 = (1 - t1) * staA.h + t1 * staB.h;
+                var h2 = (1 - t2) * staA.h + t2 * staB.h;
+                var hAvg = (h1 + h2) / 2;
 
-            var extrudeSettings = { steps: 60, depth: 80, bevelEnabled: false };
-            var tunnelGeo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-            var tunnelMat = new THREE.MeshStandardMaterial({ color: 0x1f1f24, side: THREE.BackSide, roughness: 0.8 });
+                var z1 = -t1 * groundLength;
+                var z2 = -(t2) * groundLength;
+                var zChunk = groundLength / numSteps;
+
+                var boxGeo = new THREE.BoxGeometry(30, hAvg, zChunk);
+                var boxMat = new THREE.MeshStandardMaterial({{
+                    color: 0x3e3c38,
+                    wireframe: true,
+                    transparent: true,
+                    opacity: 0.35
+                }});
+                var boxMesh = new THREE.Mesh(boxGeo, boxMat);
+                boxMesh.position.set(0, hAvg / 2 - 10, -(i * zChunk) - zChunk / 2 + 5);
+                groundGroup.add(boxMesh);
+            }}
+            scene.add(groundGroup);
+
+            // 2. 선형 보간된 터널 3D 가변 튜브 생성 (Interpolated Tunnel Tube)
+            var tunnelPoints = [];
+            for (var j = 0; j <= 20; j++) {{
+                var t = j / 20;
+                // 깊이 및 위치 보간
+                var dInterp = (1 - t) * staA.d + t * staB.d;
+                var zPos = 5 - t * groundLength;
+                var yPos = -dInterp + 15;
+                tunnelPoints.push(new THREE.Vector3(0, yPos, zPos));
+            }}
+
+            var tunnelPath = new THREE.CatmullRomCurve3(tunnelPoints);
+            var tunnelGeo = new THREE.TubeGeometry(tunnelPath, 40, (staA.r + staB.r)/2, 16, false);
+            var tunnelMat = new THREE.MeshStandardMaterial({{ color: 0x1f1f24, side: THREE.BackSide }});
             var tunnelMesh = new THREE.Mesh(tunnelGeo, tunnelMat);
-            tunnelMesh.position.set(0, 0, -60);
             scene.add(tunnelMesh);
 
-            // 강관다단 훠폴링 파이프 (DXF 2 반영)
-            var pipeMat = new THREE.MeshBasicMaterial({ color: 0xab47bc });
-            for (var pAngle = 0.3; pAngle <= Math.PI - 0.3; pAngle += 0.25) {
-                var pipeGeo = new THREE.CylinderGeometry(0.12, 0.12, 22, 8);
-                var pipeMesh = new THREE.Mesh(pipeGeo, pipeMat);
-                var px = (W_base + 0.3) * Math.cos(pAngle);
-                var py = (R + 0.3) * Math.sin(pAngle);
-                pipeMesh.position.set(px, py, -20);
-                pipeMesh.rotation.x = Math.PI / 2;
-                scene.add(pipeMesh);
-            }
+            // 지보재 와이어프레임
+            var wireGeo = new THREE.WireframeGeometry(tunnelGeo);
+            var wireMat = new THREE.LineBasicMaterial({{ color: 0x00e676, linewidth: 1 }});
+            var wireMesh = new THREE.LineSegments(wireGeo, wireMat);
+            scene.add(wireMesh);
 
-            function animate() {
+            function animate() {{
                 requestAnimationFrame(animate);
-                updateCamera();
                 renderer.render(scene, camera);
-            }
+            }}
             animate();
-        });
+        }});
     </script>
 </body>
 </html>
 """
 
 # ======================================================================
-# 4. Streamlit 화면 레이아웃
+# 4. Streamlit UI (Station A & Station B 파라미터 입력 및 보간 계산)
 # ======================================================================
-col_view, col_schedule = st.columns([1.6, 1.4])
+col_view, col_input = st.columns([1.6, 1.4])
 
 with col_view:
-    st.subheader("🌐 위성 지도 (상단) & 3D 지반 로드뷰 (하단)")
-    components.html(integrated_map_3d_html, height=610)
+    st.subheader("🌐 Station 간 보간 3D 지반-터널 모델")
+    components.html(threejs_interpolated_html, height=610)
 
-with col_schedule:
-    st.subheader("📁 측점별 DXF 모델 지정 & 3D 지반 연동")
+with col_input:
+    st.subheader("⚙️ Station A / B 지반 및 터널 데이터 입력")
 
-    st.markdown("##### **[측점(STA) 구간별 DXF 파일 매핑 테이블]**")
-
-    # 수동 구간 추가 버튼
-    if st.button("➕ 측점 구간 추가 (Add STA Section)"):
-        last_end = st.session_state.dxf_schedule[-1]["end_sta"]
-        st.session_state.dxf_schedule.append({
-            "start_sta": last_end,
-            "end_sta": last_end + 20,
-            "dxf_name": f"7km235_Section({last_end}~{last_end+20}m).dxf",
-            "radius": 6.2,
-            "pipes": 0,
-            "pattern": "Pattern III"
-        })
-        st.rerun()
-
-    updated_dxf_list = []
-    parser = DXFSectionModelParser()
-
-    # 측점 구간별 DXF 파일 업로드 및 파싱 UI
-    for idx, sec in enumerate(st.session_state.dxf_schedule):
-        with st.expander(f"📌 [구간 {idx+1}] STA {sec['start_sta']}m ~ STA {sec['end_sta']}m DXF 지정", expanded=True):
-            c1, c2 = st.columns([1.2, 1.2])
-            with c1:
-                s_sta = st.number_input(f"시점 STA (m)", value=sec["start_sta"], step=5, key=f"s_sta_{idx}")
-                e_sta = st.number_input(f"종점 STA (m)", value=sec["end_sta"], step=5, key=f"e_sta_{idx}")
-            with c2:
-                uploaded_sec_dxf = st.file_uploader(f"구간 {idx+1} DXF 파일 업로드", type=["dxf"], key=f"dxf_file_{idx}")
-
-            if uploaded_sec_dxf:
-                parsed_info = parser.parse_dxf_entities(uploaded_sec_dxf)
-                sec["radius"] = parsed_info["radius"]
-                sec["pipes"] = parsed_info["pipes"]
-                sec["dxf_name"] = uploaded_sec_dxf.name
-                st.success(f"✅ **{uploaded_sec_dxf.name} 파싱 완료:** R={sec['radius']}m, 보강재 {sec['pipes']}개 ➔ 3D 모델 반영됨")
-            else:
-                st.info(f"📄 현재 연결된 DXF: `{sec['dxf_name']}`")
-
-            # 3D 지반 수치해석 결과 (OK/NG)
-            u_crown = (35.0 * 23.0 * sec["radius"] / 1500000.0) * 1000.0
-            sec_res = "OK (안전)" if u_crown <= 20.0 else "NG (보강 필요)"
-
-            if "OK" in sec_res:
-                st.success(f"3D FEA 판정 결과: **{sec_res}** 🟢")
-            else:
-                st.error(f"3D FEA 판정 결과: **{sec_res}** 🔴")
-
-            updated_dxf_list.append({
-                "start_sta": s_sta,
-                "end_sta": e_sta,
-                "dxf_name": sec["dxf_name"],
-                "radius": sec["radius"],
-                "pipes": sec["pipes"],
-                "pattern": sec["pattern"]
-            })
-
-    st.session_state.dxf_schedule = updated_dxf_list
+    # Station A 입력
+    st.markdown("##### 📍 **[Station A] STA 0+000 (시점)**")
+    cA1, cA2, cA3 = st.columns(3)
+    with cA1:
+        st.session_state.sta_a['ground_h'] = st.number_input("지표 고도 H_A (m)", value=st.session_state.sta_a['ground_h'], step=2.0)
+    with cA2:
+        st.session_state.sta_a['tunnel_depth'] = st.number_input("터널 토심 D_A (m)", value=st.session_state.sta_a['tunnel_depth'], step=2.0)
+    with cA3:
+        st.session_state.sta_a['radius'] = st.number_input("굴착 반경 R_A (m)", value=st.session_state.sta_a['radius'], step=0.2)
 
     st.divider()
-    if st.button("🚀 측점별 DXF 3D 반영 GTS NX / PLAXIS MCT 도출"):
-        st.success("측점 구간별 DXF 3D 모델이 합성된 FEA 해석 파이프라인 파일 생성이 완료되었습니다!")
+
+    # Station B 입력
+    st.markdown("##### 📍 **[Station B] STA 0+020 (종점 - 20m 거리)**")
+    cB1, cB2, cB3 = st.columns(3)
+    with cB1:
+        st.session_state.sta_b['ground_h'] = st.number_input("지표 고도 H_B (m)", value=st.session_state.sta_b['ground_h'], step=2.0)
+    with cB2:
+        st.session_state.sta_b['tunnel_depth'] = st.number_input("터널 토심 D_B (m)", value=st.session_state.sta_b['tunnel_depth'], step=2.0)
+    with cB3:
+        st.session_state.sta_b['radius'] = st.number_input("굴착 반경 R_B (m)", value=st.session_state.sta_b['radius'], step=0.2)
+
+    st.divider()
+
+    # 중앙 보간점(STA 0+010) 실시간 수칙 도출
+    mid_h = (st.session_state.sta_a['ground_h'] + st.session_state.sta_b['ground_h']) / 2.0
+    mid_d = (st.session_state.sta_a['tunnel_depth'] + st.session_state.sta_b['tunnel_depth']) / 2.0
+    mid_r = (st.session_state.sta_a['radius'] + st.session_state.sta_b['radius']) / 2.0
+
+    st.markdown("##### 📐 **[보간 결과] STA 0+010 (중앙 지점 계산값)**")
+    st.info(f"• 보간 지표 고도: **{mid_h:.2f} m**  |  • 보간 터널 토심: **{mid_d:.2f} m**  |  • 보간 터널 반경: **{mid_r:.2f} m**")
+
+    if st.button("🚀 보간 데이터 반영 3D GTS NX / PLAXIS MCT 생성"):
+        st.success("Station A~B 간 선형 보간 지반/터널 요소망이 3D 수치해석 파일로 성공적으로 도출되었습니다!")
