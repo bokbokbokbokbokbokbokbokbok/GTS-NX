@@ -1,7 +1,13 @@
-import streamlit as st
-import folium
-from streamlit_folium import st_folium
 import math
+import streamlit as st
+
+# 패키지 로딩 확인 예외 처리
+try:
+    import folium
+    from streamlit_folium import st_folium
+except ModuleNotFoundError:
+    st.error("⚠️ 필수 패키지(folium, streamlit-folium)를 설치 중입니다. 10초 후 페이지를 새로고침(F5)해 주세요!")
+    st.stop()
 
 # ======================================================================
 # 1. 페이지 기본 설정
