@@ -18,7 +18,7 @@ st.markdown("지도 위에서 **터널 시점(Start)**과 **종점(End)**을 클
 st.divider()
 
 # ======================================================================
-# 2. CesiumJS 3D 지도 HTML/JS 템플릿
+# 2. CesiumJS 3D 지도 HTML/JS 템플릿 (토큰 없이 안정적 구동 버전)
 # ======================================================================
 cesium_html = """
 <!DOCTYPE html>
@@ -32,9 +32,9 @@ cesium_html = """
       width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden;
     }
     #infoBox {
-      position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.75);
+      position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.85);
       color: white; padding: 12px; border-radius: 8px; font-family: sans-serif;
-      font-size: 13px; z-index: 999; max-width: 300px;
+      font-size: 13px; z-index: 999; max-width: 320px; box-shadow: 0 4px 6px rgba(0,0,0,0.3);
     }
   </style>
 </head>
@@ -44,25 +44,32 @@ cesium_html = """
     <b>📍 터널 노선 지정 안내</b><br>
     - <b>1번째 클릭:</b> 터널 시점 (Inlet)<br>
     - <b>2번째 클릭:</b> 터널 종점 (Outlet)<br>
-    <hr style="border: 0.5px solid #555;">
-    <div id="status">지점을 선택해 주세요...</div>
+    <hr style="border: 0.5px solid #555; margin: 8px 0;">
+    <div id="status">지도를 클릭하여 지점을 선택하세요...</div>
   </div>
 
   <script>
-    // Cesium Viewer 초기화 (기본 무료 OpenStreetMap & 지형 타일 연동)
+    // Cesium 기본 오픈소스 지도 레이어 설정
     const viewer = new Cesium.Viewer('cesiumContainer', {
-      terrainProvider: Cesium.createWorldTerrain ? Cesium.createWorldTerrain() : undefined,
+      imageryProvider: new Cesium.OpenStreetMapImageryProvider({
+        url: 'https://a.tile.openstreetmap.org/'
+      }),
+      terrainProvider: new Cesium.EllipsoidTerrainProvider(), // 외부 토큰 없이 안정 구동
       animation: false,
       timeline: false,
-      baseLayerPicker: true
+      baseLayerPicker: false,
+      geocoder: false,
+      homeButton: true,
+      sceneModePicker: true,
+      navigationHelpButton: false
     });
 
-    // 한국 지형 중심(강원도 산악지형 부근)으로 초기 카메라 이동
+    // 한국 산악지역 중심(강원도 평창 부근)으로 초기 카메라 이동
     viewer.camera.setView({
-      destination: Cesium.Cartesian3.fromDegrees(128.0, 37.5, 15000.0),
+      destination: Cesium.Cartesian3.fromDegrees(128.3, 37.5, 12000.0),
       orientation: {
         heading: Cesium.Math.toRadians(0.0),
-        pitch: Cesium.Math.toRadians(-45.0)
+        pitch: Cesium.Math.toRadians(-55.0)
       }
     });
 
@@ -72,7 +79,8 @@ cesium_html = """
     const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
 
     handler.setInputAction(function (click) {
-      const earthPosition = viewer.scene.pickPosition(click.position);
+      const earthPosition = viewer.scene.pickPosition(click.position) || 
+                            viewer.camera.pickEllipsoid(click.position, viewer.scene.globe.ellipsoid);
 
       if (Cesium.defined(earthPosition)) {
         const cartographic = Cesium.Cartographic.fromCartesian(earthPosition);
@@ -81,7 +89,7 @@ cesium_html = """
         const height = cartographic.height;
 
         if (points.length >= 2) {
-          // 기존 클릭 초기화
+          // 3번째 클릭 시 이전 노선 초기화 후 다시 시작
           points = [];
           entities.forEach(e => viewer.entities.remove(e));
           entities = [];
@@ -89,27 +97,27 @@ cesium_html = """
 
         points.push({ lon, lat, height, cartesian: earthPosition });
 
-        // 마커 추가
+        // 시점/종점 마커 추가
         const labelText = points.length === 1 ? "시점 (Inlet)" : "종점 (Outlet)";
         const color = points.length === 1 ? Cesium.Color.RED : Cesium.Color.BLUE;
 
         const pointEntity = viewer.entities.add({
           position: earthPosition,
-          point: { pixelSize: 12, color: color },
+          point: { pixelSize: 14, color: color, outlineColor: Cesium.Color.WHITE, outlineWidth: 2 },
           label: {
             text: labelText,
-            font: '14px sans-serif',
+            font: 'bold 14px sans-serif',
             fillColor: Cesium.Color.WHITE,
             outlineColor: Cesium.Color.BLACK,
-            outlineWidth: 2,
+            outlineWidth: 3,
             style: Cesium.LabelStyle.FILL_AND_OUTLINE,
             verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-            pixelOffset: new Cesium.Cartesian2(0, -10)
+            pixelOffset: new Cesium.Cartesian2(0, -12)
           }
         });
         entities.push(pointEntity);
 
-        // 2개 점 선택 완료 시 직선 노선 생성
+        // 2개 지점 선택 완료 시 3D 직선 노선 연결
         if (points.length === 2) {
           const lineEntity = viewer.entities.add({
             polyline: {
@@ -124,12 +132,12 @@ cesium_html = """
           const distance = Cesium.Cartesian3.distance(points[0].cartesian, points[1].cartesian);
 
           document.getElementById('status').innerHTML = 
-            `<b>[노선 설정 완료]</b><br>` +
-            `시점: ${points[0].lat.toFixed(5)}°, ${points[0].lon.toFixed(5)}° (${points[0].height.toFixed(1)}m)<br>` +
-            `종점: ${points[1].lat.toFixed(5)}°, ${points[1].lon.toFixed(5)}° (${points[1].height.toFixed(1)}m)<br>` +
-            `<b>총 연장: ${distance.toFixed(2)} m</b>`;
+            `<b style="color:#4CAF50;">[노선 설정 완료]</b><br>` +
+            `• 시점: ${points[0].lat.toFixed(4)}°, ${points[0].lon.toFixed(4)}°<br>` +
+            `• 종점: ${points[1].lat.toFixed(4)}°, ${points[1].lon.toFixed(4)}°<br>` +
+            `<b>• 계산된 터널 연장: ${distance.toFixed(1)} m</b>`;
         } else {
-          document.getElementById('status').innerHTML = `시점 선택 완료. 종점을 클릭하세요.`;
+          document.getElementById('status').innerHTML = `<b style="color:#FF9800;">시점 선택 완료!</b> 종점(Outlet)을 클릭하세요.`;
         }
       }
     }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
@@ -139,13 +147,13 @@ cesium_html = """
 """
 
 # ======================================================================
-# 3. 화면 배치 및 파라미터 수동/자동 연동
+# 3. 화면 배치 및 파라미터 연동 UI
 # ======================================================================
 col_map, col_param = st.columns([2, 1])
 
 with col_map:
-    st.subheader("🌐 CesiumJS 3D 위성 지도")
-    components.html(cesium_html, height=600)
+    st.subheader("🌐 3D 지도 (클릭하여 노선 지정)")
+    components.html(cesium_html, height=620)
 
 with col_param:
     st.subheader("📏 터널 설계 & 공사비 산출")
@@ -155,7 +163,7 @@ with col_param:
     
     rmr_score = st.slider("지반 RMR 점수", min_value=0, max_value=100, value=55)
 
-    # RMR 기반 패턴 자동 산정
+    # RMR 기반 굴착 패턴 및 공사비 자동 계산
     if rmr_score >= 61:
         pattern = "Pattern I (전단면 굴착)"
         cost_per_m = 12000000  # 원/m
@@ -168,19 +176,19 @@ with col_param:
 
     st.info(f"**추천 굴착 패턴:** {pattern}")
 
-    # 개략 공사비 산출 수식
+    # 개략 공사비 산출
     total_cost_krw = (tunnel_length * cost_per_m) + 500000000  # 갱문부 고정비 5억 추가
     
     st.metric("총 개략 공사비", f"{total_cost_krw / 1e8:.2f} 억원")
 
     st.divider()
     
-    # Hoek-Brown 파괴 검토 맛보기
-    st.subheader("🛡️ Hoek-Brown 지반 파괴 검토")
+    # 지반 파괴 검토
+    st.subheader("🛡️ Hoek-Brown 암반 파괴 검토")
     sig_ci = st.number_input("암석 일축압축강도 σci (kPa)", value=50000.0, step=5000.0)
-    gsi = rmr_score - 5  # RMR 기반 GSI 추정식 예시
+    gsi = max(0, rmr_score - 5)
     
     st.write(f"추정 GSI 지수: **{gsi}**")
     
-    if st.button("🚀 GTS NX 연동 MCT 생성"):
-        st.success("지형 좌표 및 굴착 패턴이 적용된 MCT 데이터 준비 완료!")
+    if st.button("🚀 GTS NX 연동 MCT 데이터 도출"):
+        st.success("노선 정보 및 파라미터가 반영되었습니다!")
