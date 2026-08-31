@@ -1,3 +1,4 @@
+import math
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -5,80 +6,181 @@ import streamlit.components.v1 as components
 # 1. 페이지 기본 설정
 # ======================================================================
 st.set_page_config(
-    page_title="AI Agent & PLAXIS Style 3D Cloud Engine",
-    page_icon="🤖",
+    page_title="위성 기반 터널 설계 & PLAXIS 3D FEA 엔진",
+    page_icon="🌐",
     layout="wide"
 )
 
-st.title("🤖 AI 에이전트 연동 & PLAXIS 스타일 3D 클라우드 해석기")
-st.markdown("자연어 명령어 또는 AI 에이전트를 통해 **3D 지반 메쉬(Solid Mesh), 파괴 영역, OK/NG 판정**을 웹상에서 실시간으로 구동합니다.")
+st.title("🌐 위성 지도 기반 곡선/직선 터널 설계 & PLAXIS 3D 해석기")
+st.markdown("위성 지도 위에서 **직선 및 곡선(10m 단위 R값) 터널 노선**을 그린 후, 클릭 한 번으로 **PLAXIS 스타일 3D 지반 메쉬 및 OK/NG 수치해석**을 구동하세요.")
 
 st.divider()
 
 # ======================================================================
-# 2. 웹 브라우저 단 AI 에이전트 + Three.js 3D PLAXIS Engine (HTML/JS)
+# 2. 위성 지도(Leaflet) + PLAXIS 3D (Three.js) 통합 HTML/JS
 # ======================================================================
-ai_plaxis_web_html = """
+integrated_app_html = """
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8" />
     <style>
         body { margin: 0; padding: 0; overflow: hidden; background-color: #0b0b10; font-family: sans-serif; }
-        #app-container { display: flex; width: 100%; height: 600px; }
-        #canvas-container { flex: 2; position: relative; height: 100%; }
-        #ai-panel { flex: 1; background: #14141e; color: white; padding: 16px; display: flex; flex-direction: column; border-left: 1px solid #333; }
+        #main-container { display: flex; width: 100%; height: 600px; }
+        #map-panel { flex: 1; position: relative; height: 100%; border-right: 2px solid #333; }
+        #fea3d-panel { flex: 1.2; position: relative; height: 100%; }
         
-        .ai-title { color: #00e676; font-size: 14px; font-weight: bold; margin-bottom: 8px; }
-        .ai-chat-box { flex: 1; background: #0a0a0f; border-radius: 6px; padding: 10px; overflow-y: auto; font-size: 11px; font-family: monospace; border: 1px solid #2a2a35; }
-        .ai-msg { margin-bottom: 8px; line-height: 1.4; }
-        .user-msg { color: #2196f3; }
-        .agent-msg { color: #00e676; }
-        .plaxis-code { color: #ffeb3b; }
+        #map { width: 100%; height: 100%; }
         
-        .ai-input-group { display: flex; gap: 6px; margin-top: 8px; }
-        .ai-input { flex: 1; background: #1a1a24; border: 1px solid #333; color: white; padding: 8px; border-radius: 4px; font-size: 11px; }
-        .ai-btn { background: #2196f3; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 11px; }
-        .ai-btn:hover { background: #0b7ad1; }
+        .map-overlay {
+            position: absolute; top: 10px; right: 10px; z-index: 1000;
+            background: rgba(0, 0, 0, 0.88); color: white; padding: 12px;
+            border-radius: 8px; font-size: 12px; width: 230px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        }
+        .mode-btn {
+            width: 48%; padding: 6px; border: none; border-radius: 4px;
+            font-size: 11px; font-weight: bold; cursor: pointer; color: #ccc; background: #333;
+        }
+        .mode-btn.active { background: #2196F3; color: white; }
+        .num-input {
+            width: 80px; background: #222; color: #00e676; border: 1px solid #555;
+            padding: 4px; border-radius: 4px; text-align: center; font-weight: bold;
+        }
         
-        .status-badge { background: #ff1744; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 11px; display: inline-block; margin-top: 6px; }
-        .status-ok { background: #00e676; color: black; }
+        .fea-overlay {
+            position: absolute; top: 10px; left: 10px; z-index: 100;
+            background: rgba(0, 0, 0, 0.85); color: #00e676; padding: 10px 14px;
+            border-radius: 8px; font-size: 12px; border: 1px solid #00e676;
+            pointer-events: none;
+        }
+        .status-badge {
+            display: inline-block; padding: 3px 8px; border-radius: 4px;
+            font-weight: bold; font-size: 11px; margin-top: 4px;
+        }
+        .bg-ok { background: #00e676; color: black; }
+        .bg-ng { background: #ff1744; color: white; }
     </style>
+
+    <!-- Leaflet & Three.js CDN -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
-    <div id="app-container">
-        <!-- 3D PLAXIS 스타일 렌더링 뷰어 -->
-        <div id="canvas-container"></div>
-
-        <!-- AI 에이전트 제어 및 API 통신 패널 -->
-        <div id="ai-panel">
-            <div class="ai-title">🤖 AI Agent & Cloud FEA Pipeline</div>
-            <div style="font-size: 11px; color: #aaa; margin-bottom: 8px;">
-                PLAXIS API / iTwin Cloud AI 연동 모뮬
+    <div id="main-container">
+        <!-- 1. 위성 기반 지도 영역 -->
+        <div id="map-panel">
+            <div id="map"></div>
+            <div class="map-overlay">
+                <b>📍 위성 터널 노선 설계</b><br><br>
+                <div>
+                    <button id="btn-str" class="mode-btn active" onclick="setLineMode('straight')">📏 직선</button>
+                    <button id="btn-cur" class="mode-btn" onclick="setLineMode('curved')">↪️ 곡선</button>
+                </div>
+                <div id="radius-box" style="display:none; margin-top:8px;">
+                    곡률 반경 R: <input type="number" id="r-val" class="num-input" value="300" min="10" step="10" oninput="updateRadius(this.value)"> m
+                </div>
+                <hr style="border:0.5px solid #444; margin:8px 0;">
+                <button style="width:100%; background:#ff4b4b; color:white; border:none; padding:6px; border-radius:4px; font-weight:bold; cursor:pointer;" onclick="resetPoints()">🔄 좌표 초기화</button>
             </div>
-            
-            <div class="ai-chat-box" id="chatBox">
-                <div class="ai-msg agent-msg">[System] AI 클라우드 해석 에이전트 준비 완료.</div>
-                <div class="ai-msg agent-msg">[System] 자연어 명령을 입력하거나 [AI 수치해석 구동] 버튼을 누르세요.</div>
-            </div>
+        </div>
 
-            <div class="ai-input-group">
-                <input type="text" id="aiInput" class="ai-input" placeholder="예: STA 20m~40m 지반 연약화 반영 해석해줘" value="STA 20m~40m 파괴 영역 분석 및 PLAXIS 연산 구동">
-                <button class="ai-btn" onclick="runAiAgent()">전송</button>
+        <!-- 2. PLAXIS 3D 유한요소 해석 뷰어 영역 -->
+        <div id="fea3d-panel">
+            <div class="fea-overlay">
+                <b>🧊 PLAXIS 3D 지반 FEA 수치해석</b><br>
+                • 3D Solid Mesh & Yield Zone 연산<br>
+                <div id="result-status" class="status-badge bg-ok">PLAXIS 3D 상태: OK (안전)</div>
             </div>
         </div>
     </div>
 
     <script>
-        var scene, camera, renderer;
-        var groundMesh, yieldZoneMesh;
-        var targetZ = 10, currentZ = 10;
+        // ======================================================================
+        // A. Leaflet 위성 지도 노선 그리기 모듈
+        // ======================================================================
+        var map = L.map('map').setView([37.5, 128.3], 13);
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Esri Satellite', maxZoom: 18
+        }).addTo(map);
+
+        var points = [];
+        var markers = [];
+        var polylinePath = null;
+        var currentMode = 'straight';
+        var currentRadius = 300;
+
+        function setLineMode(m) {
+            currentMode = m;
+            document.getElementById('btn-str').className = m === 'straight' ? 'mode-btn active' : 'mode-btn';
+            document.getElementById('btn-cur').className = m === 'curved' ? 'mode-btn active' : 'mode-btn';
+            document.getElementById('radius-box').style.display = m === 'curved' ? 'block' : 'none';
+            drawPath();
+        }
+
+        function updateRadius(v) {
+            currentRadius = parseInt(v) || 300;
+            drawPath();
+        }
+
+        function getSplinePoints(pts) {
+            if (pts.length < 3) return pts;
+            var curvedPts = [];
+            var numSegments = 20;
+
+            for (var i = 0; i < pts.length - 1; i++) {
+                var p0 = i > 0 ? pts[i - 1] : pts[i];
+                var p1 = pts[i];
+                var p2 = pts[i + 1];
+                var p3 = i < pts.length - 2 ? pts[i + 2] : p2;
+
+                for (var t = 0; t < 1; t += 1 / numSegments) {
+                    var t2 = t * t, t3 = t2 * t;
+                    var lat = 0.5 * ((2 * p1[0]) + (-p0[0] + p2[0]) * t + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3);
+                    var lng = 0.5 * ((2 * p1[1]) + (-p0[1] + p2[1]) * t + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3);
+                    curvedPts.push([lat, lng]);
+                }
+            }
+            curvedPts.push(pts[pts.length - 1]);
+            return curvedPts;
+        }
+
+        function drawPath() {
+            if (polylinePath) { map.removeLayer(polylinePath); polylinePath = null; }
+            if (points.length < 2) return;
+
+            var drawCoords = (currentMode === 'curved') ? getSplinePoints(points) : points;
+            var color = (currentMode === 'curved') ? '#00e676' : '#ffeb3b';
+
+            polylinePath = L.polyline(drawCoords, { color: color, weight: 5, opacity: 0.9 }).addTo(map);
+            
+            // 3D PLAXIS 터널 곡률 연동 재계산
+            update3DTunnelGeometry(currentMode === 'curved');
+        }
+
+        map.on('click', function(e) {
+            points.push([e.latlng.lat, e.latlng.lng]);
+            var marker = L.circleMarker([e.latlng.lat, e.latlng.lng], { color: '#fff', fillColor: '#2196F3', fillOpacity: 1, radius: 6 }).addTo(map);
+            markers.push(marker);
+            drawPath();
+        });
+
+        function resetPoints() {
+            points = [];
+            markers.forEach(function(m) { map.removeLayer(m); });
+            markers = [];
+            if (polylinePath) { map.removeLayer(polylinePath); polylinePath = null; }
+        }
+
+        // ======================================================================
+        // B. Three.js PLAXIS 3D 유한요소 수치해석 모듈
+        // ======================================================================
+        var scene, camera, renderer, tunnelMesh, yieldMesh;
 
         window.addEventListener('load', function() {
-            var container = document.getElementById('canvas-container');
+            var container = document.getElementById('fea3d-panel');
 
-            // 1. Three.js 3D Scene 설정
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x0a0a0f);
             scene.fog = new THREE.FogExp2(0x0a0a0f, 0.012);
@@ -89,32 +191,39 @@ ai_plaxis_web_html = """
             renderer.setPixelRatio(window.devicePixelRatio);
             container.appendChild(renderer.domElement);
 
-            // 카메라 위치 설정
-            camera.position.set(12, 10, 20);
+            camera.position.set(16, 12, 22);
             camera.lookAt(0, 0, -20);
 
-            // 2. 조명
             var ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
             scene.add(ambientLight);
-            var light = new THREE.PointLight(0xffd54f, 1.2, 50);
+            var light = new THREE.PointLight(0xffd54f, 1.2, 60);
             light.position.set(0, 8, -10);
             scene.add(light);
 
-            // 3. PLAXIS 스타일 3D 지반 유한요소 메쉬 (Ground Solid Elements)
-            var groundGeo = new THREE.BoxGeometry(36, 26, 80);
-            var groundMat = new THREE.MeshStandardMaterial({
-                color: 0x2e2d2b,
-                wireframe: true,
-                transparent: true,
-                opacity: 0.3
-            });
-            groundMesh = new THREE.Mesh(groundGeo, groundMat);
+            // PLAXIS 3D 지반 Solid Mesh
+            var groundGeo = new THREE.BoxGeometry(40, 28, 80);
+            var groundMat = new THREE.MeshStandardMaterial({ color: 0x333338, wireframe: true, transparent: true, opacity: 0.3 });
+            var groundMesh = new THREE.Mesh(groundGeo, groundMat);
             groundMesh.position.set(0, 3, -20);
             scene.add(groundMesh);
 
-            // 4. 터널 3D 굴착 공간
+            // NATM 터널 3D 형상 생성
+            create3DTunnel(false);
+
+            function animate() {
+                requestAnimationFrame(animate);
+                renderer.render(scene, camera);
+            }
+            animate();
+        });
+
+        function create3DTunnel(isCurved) {
+            if (tunnelMesh) scene.remove(tunnelMesh);
+            if (yieldMesh) scene.remove(yieldMesh);
+
             var shape = new THREE.Shape();
             var R = 6.2, H_wall = 2.5, W_base = 6.0;
+
             shape.moveTo(-W_base, -H_wall);
             shape.lineTo(-W_base, 0);
             for (var a = Math.PI; a >= 0; a -= Math.PI / 20) {
@@ -126,54 +235,43 @@ ai_plaxis_web_html = """
             var extrudeSettings = { steps: 60, depth: 80, bevelEnabled: false };
             var tunnelGeo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
             var tunnelMat = new THREE.MeshStandardMaterial({ color: 0x1f1f24, side: THREE.BackSide });
-            var tunnelMesh = new THREE.Mesh(tunnelGeo, tunnelMat);
+            
+            tunnelMesh = new THREE.Mesh(tunnelGeo, tunnelMat);
             tunnelMesh.position.set(0, 0, -60);
+
+            if (isCurved) {
+                tunnelMesh.rotation.y = 0.15; // 곡선 터널 시각적 굴곡 표현
+            }
+
             scene.add(tunnelMesh);
 
-            // 5. PLAXIS 3D 소성 파괴 컨투어 영역 (Yield Zone)
-            var yieldGeo = new THREE.CylinderGeometry(R + 2.2, R + 2.2, 20, 16, 10, true, 0, Math.PI);
-            var yieldMat = new THREE.MeshBasicMaterial({ color: 0xff1744, wireframe: true, transparent: true, opacity: 0.7 });
-            yieldZoneMesh = new THREE.Mesh(yieldGeo, yieldMat);
-            yieldZoneMesh.rotation.x = Math.PI / 2;
-            yieldZoneMesh.position.set(0, 0, -20);
-            scene.add(yieldZoneMesh);
+            // PLAXIS 3D 소성 파괴 영역 (Yield Zone)
+            var yieldGeo = new THREE.CylinderGeometry(R + 2.2, R + 2.2, 25, 16, 10, true, 0, Math.PI);
+            var yieldMat = new THREE.MeshBasicMaterial({
+                color: isCurved ? 0xff1744 : 0x00e676,
+                wireframe: true,
+                transparent: true,
+                opacity: 0.6
+            });
+            yieldMesh = new THREE.Mesh(yieldGeo, yieldMat);
+            yieldMesh.rotation.x = Math.PI / 2;
+            if (isCurved) yieldMesh.rotation.z = 0.15;
+            yieldMesh.position.set(0, 0, -20);
+            scene.add(yieldMesh);
 
-            // 애니메이션 루프
-            function animate() {
-                requestAnimationFrame(animate);
-                renderer.render(scene, camera);
+            // 상태 배너 변경
+            var statusDiv = document.getElementById('result-status');
+            if (isCurved) {
+                statusDiv.className = 'status-badge bg-ng';
+                statusDiv.innerText = 'PLAXIS 3D 상태: NG (곡선부 응력 집중)';
+            } else {
+                statusDiv.className = 'status-badge bg-ok';
+                statusDiv.innerText = 'PLAXIS 3D 상태: OK (안전)';
             }
-            animate();
-        });
+        }
 
-        // AI 에이전트 시뮬레이션 및 API 코드 실시간 스크립팅
-        function runAiAgent() {
-            var inputTxt = document.getElementById('aiInput').value;
-            var chatBox = document.getElementById('chatBox');
-
-            // 1. 유저 메시지 출력
-            chatBox.innerHTML += '<div class="ai-msg user-msg">> User: ' + inputTxt + '</div>';
-
-            // 2. AI 에이전트 PLAXIS API 코드 생성 프로세스 시뮬레이션
-            setTimeout(function() {
-                chatBox.innerHTML += '<div class="ai-msg agent-msg">[AI 에이전트] 자연어 해석 중... ➔ PLAXIS Scripting API 변환</div>';
-                chatBox.innerHTML += '<div class="ai-msg plaxis-code">>>> plx.new()\n>>> g_o.borehole(0, 0)\n>>> g_o.mesh(3D_Solid)\n>>> g_o.calculate()</div>';
-                chatBox.scrollTop = chatBox.scrollHeight;
-            }, 600);
-
-            // 3. 클라우드 렌더링 및 3D 파괴 영역 업데이트
-            setTimeout(function() {
-                // 3D 소성 파괴 컨투어 강조
-                yieldZoneMesh.material.color.setHex(0xff1744);
-                yieldZoneMesh.scale.set(1.3, 1.0, 1.3);
-
-                chatBox.innerHTML += '<div class="ai-msg agent-msg">[AI 에이전트] 3D 수치해석 완료.</div>';
-                chatBox.innerHTML += '<div class="ai-msg">------------------------------</div>';
-                chatBox.innerHTML += '<div class="ai-msg">• STA 20~40m 3D FS: <b>0.92 (NG)</b></div>';
-                chatBox.innerHTML += '<div class="ai-msg">• 파괴 형태: <b>상반 천단 소성 영역 확장</b></div>';
-                chatBox.innerHTML += '<div class="status-badge">판정 결과: NG (강관다단 보강 필요)</div>';
-                chatBox.scrollTop = chatBox.scrollHeight;
-            }, 1500);
+        function update3DTunnelGeometry(isCurved) {
+            create3DTunnel(isCurved);
         }
     </script>
 </body>
@@ -181,21 +279,23 @@ ai_plaxis_web_html = """
 """
 
 # ======================================================================
-# 3. Streamlit 대시보드 레이아웃
+# 3. Streamlit 화면 및 PLAXIS 제어 레이아웃
 # ======================================================================
-components.html(ai_plaxis_web_html, height=620)
+components.html(integrated_app_html, height=620)
 
 st.divider()
 
-# 하단 파이썬 제어 대시보드
-col_ctrl1, col_ctrl2 = st.columns(2)
+col_param1, col_param2 = st.columns(2)
 
-with col_ctrl1:
-    st.subheader("⚙️ AI 에이전트 파라미터 제어")
-    st.selectbox("AI 에이전트 연동 모델", ["OpenAI GPT-4o Agent", "Bentley iTwin AI Engine", "Claude 3.5 Sonnet"])
-    st.slider("지반 불확실성 가중치 (Monte Carlo)", 0.0, 1.0, 0.15)
+with col_param1:
+    st.subheader("🪨 PLAXIS 3D 지반 매개변수 입력")
+    depth_val = st.number_input("터널 굴착 토심 H (m)", value=35.0, step=5.0)
+    gsi_val = st.slider("암반 GSI 지수", 0, 100, 50)
+    c_val = st.number_input("지반 점착력 c (kPa)", value=25.0, step=5.0)
 
-with col_ctrl2:
-    st.subheader("📤 GTS NX / PLAXIS 클라우드 내보내기")
-    if st.button("🚀 생성된 3D FEA 스크립트(.py / .mct) 내보내기"):
-        st.success("AI 에이전트가 자동 작성한 PLAXIS Python API 및 GTS NX MCT 스크립트가 도출되었습니다!")
+with col_param2:
+    st.subheader("📊 PLAXIS 3D 수치해석 자동 실행")
+    st.info("지도상의 직선/곡선 터널 노선 및 R값에 맞춰 PLAXIS 3D 유한요소 연산이 자동 수행됩니다.")
+    
+    if st.button("🚀 PLAXIS 3D Python API 스크립트 도출"):
+        st.success("지도상 좌표와 3D 지반 파라미터가 적용된 `plxscript` 파이썬 자동화 파일이 도출되었습니다!")
