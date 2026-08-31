@@ -1,273 +1,201 @@
-import math
-import io
-import re
-import numpy as np
 import streamlit as st
 import streamlit.components.v1 as components
-
-# ezdxf 패키지 로드
-try:
-    import ezdxf
-except ModuleNotFoundError:
-    st.error("⚠️ `ezdxf` 패키지가 필요합니다. `requirements.txt`에 `ezdxf`를 추가해 주세요.")
-    st.stop()
 
 # ======================================================================
 # 1. 페이지 기본 설정
 # ======================================================================
 st.set_page_config(
-    page_title="GTS NX 3D 지반-터널 연계 FEA 수치해석 엔진",
-    page_icon="🏔️",
+    page_title="AI Agent & PLAXIS Style 3D Cloud Engine",
+    page_icon="🤖",
     layout="wide"
 )
 
-st.title("🏔️ 3D 지반 요소(Ground Mass) 연동 FEA 해석 & 3D 로드뷰")
-st.markdown("지반 고도, 암반 등급(RMR/GSI), 층후를 **3D 유한요소망(3D Ground Solid Elements)**으로 변환하여 3D 지반 파괴 및 침투 수치해석을 수행합니다.")
+st.title("🤖 AI 에이전트 연동 & PLAXIS 스타일 3D 클라우드 해석기")
+st.markdown("자연어 명령어 또는 AI 에이전트를 통해 **3D 지반 메쉬(Solid Mesh), 파괴 영역, OK/NG 판정**을 웹상에서 실시간으로 구동합니다.")
 
 st.divider()
 
 # ======================================================================
-# 2. 파이썬 백엔드: 3D 지반-터널 연계 수치해석 연산기 (GTS NX 3D 수식)
+# 2. 웹 브라우저 단 AI 에이전트 + Three.js 3D PLAXIS Engine (HTML/JS)
 # ======================================================================
-class Ground3DFEASolver:
-    """GTS NX 3D Mohr-Coulomb & Hoek-Brown 3D 암반 파괴 평가 엔진"""
-    def __init__(self, depth=35.0, rmr=55, gsi=50, sig_ci=50000.0):
-        self.H = depth
-        self.rmr = rmr
-        self.gsi = gsi
-        self.sig_ci = sig_ci  # 암석 일축압축강도 (kPa)
-
-    def calculate_3d_ground_stress(self, gamma=23.0, k0=0.5):
-        """3D 주응력 (σ1, σ2, σ3) 및 유효응력 연산"""
-        sig_v = gamma * self.H
-        sig_h = k0 * sig_v
-        
-        sig_1 = sig_v  # 최대 주응력
-        sig_3 = sig_h  # 최소 주응력
-        return sig_1, sig_3
-
-    def evaluate_hoek_brown_3d(self, sig_1, sig_3, mi=15):
-        """
-        [GTS NX 3D Hoek-Brown 암반 파괴 수식]
-        f_hb = sig_1 - sig_3 - sig_ci * (mb * (sig_3 / sig_ci) + s)^a
-        """
-        mb = mi * math.exp((self.gsi - 100) / 28)
-        s = math.exp((self.gsi - 100) / 9)
-        a = 0.5 + (1/6) * (math.exp(-self.gsi/15) - math.exp(-20/3))
-
-        # 파괴 지수 f_hb 연산 (f_hb > 0 이면 3D 지반 파괴 발생)
-        sig_1_yield = sig_3 + self.sig_ci * ((mb * (sig_3 / self.sig_ci) + s) ** a)
-        safety_factor_3d = sig_1_yield / (sig_1 + 1e-5)
-        
-        status = "OK (3D 탄성 영역)" if safety_factor_3d >= 1.2 else "NG (3D 소성 파괴 발생)"
-        return safety_factor_3d, status
-
-# 세션 관리
-if "sections" not in st.session_state:
-    st.session_state.sections = [
-        {"start_sta": 0, "end_sta": 20, "pattern": "Pattern III", "rmr": 55, "gsi": 50, "bolt_sp": 1.5, "shot_thk": 150},
-        {"start_sta": 20, "end_sta": 40, "pattern": "Pattern V", "rmr": 35, "gsi": 30, "bolt_sp": 1.0, "shot_thk": 200},
-        {"start_sta": 40, "end_sta": 60, "pattern": "Pattern II", "rmr": 70, "gsi": 65, "bolt_sp": 2.0, "shot_thk": 100},
-    ]
-
-# ======================================================================
-# 3. Three.js - 3D 지반 블록(Ground Solid Mass) & 터널 연동 뷰어
-# ======================================================================
-threejs_3d_ground_html = """
+ai_plaxis_web_html = """
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8" />
     <style>
         body { margin: 0; padding: 0; overflow: hidden; background-color: #0b0b10; font-family: sans-serif; }
-        #canvas-container { width: 100%; height: 580px; position: relative; }
-        .roadview-nav {
-            position: absolute; top: 12px; left: 12px; z-index: 100;
-            background: rgba(0, 0, 0, 0.90); color: white; padding: 12px;
-            border-radius: 8px; font-size: 12px; border: 1px solid #00e676;
-        }
-        .sta-btn-group { display: flex; gap: 6px; margin-top: 8px; }
-        .sta-btn {
-            background: #2196f3; color: white; border: none; padding: 6px 10px;
-            border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 11px;
-        }
-        .sta-btn.active { background: #00e676; color: black; }
-        .legend-box {
-            position: absolute; bottom: 12px; left: 12px; z-index: 100;
-            background: rgba(0, 0, 0, 0.85); color: white; padding: 8px 12px;
-            border-radius: 6px; font-size: 11px;
-        }
+        #app-container { display: flex; width: 100%; height: 600px; }
+        #canvas-container { flex: 2; position: relative; height: 100%; }
+        #ai-panel { flex: 1; background: #14141e; color: white; padding: 16px; display: flex; flex-direction: column; border-left: 1px solid #333; }
+        
+        .ai-title { color: #00e676; font-size: 14px; font-weight: bold; margin-bottom: 8px; }
+        .ai-chat-box { flex: 1; background: #0a0a0f; border-radius: 6px; padding: 10px; overflow-y: auto; font-size: 11px; font-family: monospace; border: 1px solid #2a2a35; }
+        .ai-msg { margin-bottom: 8px; line-height: 1.4; }
+        .user-msg { color: #2196f3; }
+        .agent-msg { color: #00e676; }
+        .plaxis-code { color: #ffeb3b; }
+        
+        .ai-input-group { display: flex; gap: 6px; margin-top: 8px; }
+        .ai-input { flex: 1; background: #1a1a24; border: 1px solid #333; color: white; padding: 8px; border-radius: 4px; font-size: 11px; }
+        .ai-btn { background: #2196f3; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 11px; }
+        .ai-btn:hover { background: #0b7ad1; }
+        
+        .status-badge { background: #ff1744; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 11px; display: inline-block; margin-top: 6px; }
+        .status-ok { background: #00e676; color: black; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
-    <div id="canvas-container">
-        <div class="roadview-nav">
-            <b>📍 3D 지반 요소망(Ground Solid Mesh) 탐색</b>
-            <div class="sta-btn-group">
-                <button class="sta-btn active" onclick="moveToSta(0)">STA 0m</button>
-                <button class="sta-btn" onclick="moveToSta(20)">STA 20m</button>
-                <button class="sta-btn" onclick="moveToSta(40)">STA 40m</button>
-                <button class="sta-btn" onclick="moveToSta(60)">STA 60m</button>
+    <div id="app-container">
+        <!-- 3D PLAXIS 스타일 렌더링 뷰어 -->
+        <div id="canvas-container"></div>
+
+        <!-- AI 에이전트 제어 및 API 통신 패널 -->
+        <div id="ai-panel">
+            <div class="ai-title">🤖 AI Agent & Cloud FEA Pipeline</div>
+            <div style="font-size: 11px; color: #aaa; margin-bottom: 8px;">
+                PLAXIS API / iTwin Cloud AI 연동 모뮬
             </div>
-        </div>
-        <div class="legend-box">
-            <b>🪨 3D 지반 체적 요소(3D Solid Element):</b><br>
-            🟤 상부 토사/풍화암 | 🔘 암반 지반 블록 | 🔴 파괴 위험 체적(Yield Zone)
+            
+            <div class="ai-chat-box" id="chatBox">
+                <div class="ai-msg agent-msg">[System] AI 클라우드 해석 에이전트 준비 완료.</div>
+                <div class="ai-msg agent-msg">[System] 자연어 명령을 입력하거나 [AI 수치해석 구동] 버튼을 누르세요.</div>
+            </div>
+
+            <div class="ai-input-group">
+                <input type="text" id="aiInput" class="ai-input" placeholder="예: STA 20m~40m 지반 연약화 반영 해석해줘" value="STA 20m~40m 파괴 영역 분석 및 PLAXIS 연산 구동">
+                <button class="ai-btn" onclick="runAiAgent()">전송</button>
+            </div>
         </div>
     </div>
 
     <script>
-        var targetZ = 10;
-        var currentZ = 10;
-
-        function moveToSta(sta) {
-            var btns = document.querySelectorAll('.sta-btn');
-            btns.forEach(function(b) { b.classList.remove('active'); });
-            event.target.classList.add('active');
-            targetZ = 10 - sta;
-        }
+        var scene, camera, renderer;
+        var groundMesh, yieldZoneMesh;
+        var targetZ = 10, currentZ = 10;
 
         window.addEventListener('load', function() {
             var container = document.getElementById('canvas-container');
 
-            var scene = new THREE.Scene();
+            // 1. Three.js 3D Scene 설정
+            scene = new THREE.Scene();
             scene.background = new THREE.Color(0x0a0a0f);
             scene.fog = new THREE.FogExp2(0x0a0a0f, 0.012);
 
-            var camera = new THREE.PerspectiveCamera(70, container.clientWidth / 580, 0.1, 1000);
-            var renderer = new THREE.WebGLRenderer({ antialias: true });
-            renderer.setSize(container.clientWidth, 580);
+            camera = new THREE.PerspectiveCamera(70, container.clientWidth / 600, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, 600);
             renderer.setPixelRatio(window.devicePixelRatio);
             container.appendChild(renderer.domElement);
 
-            var isDragging = false;
-            var previousMousePosition = { x: 0, y: 0 };
-            var cameraTheta = 0;
-            var cameraPhi = Math.PI / 2.3;
+            // 카메라 위치 설정
+            camera.position.set(12, 10, 20);
+            camera.lookAt(0, 0, -20);
 
-            function updateCamera() {
-                currentZ += (targetZ - currentZ) * 0.08;
-                var r = 18;
-                camera.position.x = r * Math.sin(cameraPhi) * Math.sin(cameraTheta);
-                camera.position.y = r * Math.cos(cameraPhi) + 1.2;
-                camera.position.z = currentZ + (r * Math.sin(cameraPhi) * Math.cos(cameraTheta));
-                camera.lookAt(0, 1.0, currentZ - 20);
-            }
-
-            renderer.domElement.addEventListener('mousedown', function() { isDragging = true; });
-            renderer.domElement.addEventListener('mousemove', function(e) {
-                if (isDragging) {
-                    var deltaX = e.clientX - previousMousePosition.x;
-                    var deltaY = e.clientY - previousMousePosition.y;
-                    cameraTheta -= deltaX * 0.005;
-                    cameraPhi -= deltaY * 0.005;
-                    cameraPhi = Math.max(0.1, Math.min(Math.PI - 0.1, cameraPhi));
-                }
-                previousMousePosition = { x: e.clientX, y: e.clientY };
-            });
-            window.addEventListener('mouseup', function() { isDragging = false; });
-            renderer.domElement.addEventListener('wheel', function(e) {
-                targetZ -= e.deltaY * 0.03;
-                targetZ = Math.max(-55, Math.min(15, targetZ));
-            });
-
+            // 2. 조명
             var ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
             scene.add(ambientLight);
+            var light = new THREE.PointLight(0xffd54f, 1.2, 50);
+            light.position.set(0, 8, -10);
+            scene.add(light);
 
-            for (var lz = -70; lz <= 10; lz += 20) {
-                var light = new THREE.PointLight(0xffd54f, 1.2, 25);
-                light.position.set(0, 4.5, lz);
-                scene.add(light);
-            }
-
-            // 1. 3D 지반 체적 요소망 (Ground Solid Mass Blocks)
-            var groundGeo = new THREE.BoxGeometry(40, 30, 80);
+            // 3. PLAXIS 스타일 3D 지반 유한요소 메쉬 (Ground Solid Elements)
+            var groundGeo = new THREE.BoxGeometry(36, 26, 80);
             var groundMat = new THREE.MeshStandardMaterial({
                 color: 0x2e2d2b,
+                wireframe: true,
                 transparent: true,
-                opacity: 0.35,
-                wireframe: true
+                opacity: 0.3
             });
-            var groundBlock = new THREE.Mesh(groundGeo, groundMat);
-            groundBlock.position.set(0, 5, -20);
-            scene.add(groundBlock);
+            groundMesh = new THREE.Mesh(groundGeo, groundMat);
+            groundMesh.position.set(0, 3, -20);
+            scene.add(groundMesh);
 
-            // 2. NATM 터널 3D 굴착 공간
+            // 4. 터널 3D 굴착 공간
             var shape = new THREE.Shape();
-            var R = 6.2;
-            var H_wall = 2.5;
-            var W_base = 6.0;
-
+            var R = 6.2, H_wall = 2.5, W_base = 6.0;
             shape.moveTo(-W_base, -H_wall);
             shape.lineTo(-W_base, 0);
             for (var a = Math.PI; a >= 0; a -= Math.PI / 20) {
-                var ax = (W_base / R) * R * Math.cos(a);
-                var ay = (R * Math.sin(a));
-                shape.lineTo(ax, ay);
+                shape.lineTo((W_base / R) * R * Math.cos(a), R * Math.sin(a));
             }
             shape.lineTo(W_base, -H_wall);
             shape.lineTo(-W_base, -H_wall);
 
             var extrudeSettings = { steps: 60, depth: 80, bevelEnabled: false };
             var tunnelGeo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-            var tunnelMat = new THREE.MeshStandardMaterial({ color: 0x1f1f24, side: THREE.BackSide, roughness: 0.8 });
+            var tunnelMat = new THREE.MeshStandardMaterial({ color: 0x1f1f24, side: THREE.BackSide });
             var tunnelMesh = new THREE.Mesh(tunnelGeo, tunnelMat);
             tunnelMesh.position.set(0, 0, -60);
             scene.add(tunnelMesh);
 
-            // 3. 지반 3D 소성 파괴 영역 (Yield Zone - 20~40m 구간 Red Solid)
-            var yieldGeo = new THREE.CylinderGeometry(R + 2.0, R + 2.0, 20, 16, 10, true, 0, Math.PI);
-            var yieldMat = new THREE.MeshBasicMaterial({ color: 0xff1744, wireframe: true, transparent: true, opacity: 0.6 });
-            var yieldMesh = new THREE.Mesh(yieldGeo, yieldMat);
-            yieldMesh.rotation.x = Math.PI / 2;
-            yieldMesh.position.set(0, 0, -20);
-            scene.add(yieldMesh);
+            // 5. PLAXIS 3D 소성 파괴 컨투어 영역 (Yield Zone)
+            var yieldGeo = new THREE.CylinderGeometry(R + 2.2, R + 2.2, 20, 16, 10, true, 0, Math.PI);
+            var yieldMat = new THREE.MeshBasicMaterial({ color: 0xff1744, wireframe: true, transparent: true, opacity: 0.7 });
+            yieldZoneMesh = new THREE.Mesh(yieldGeo, yieldMat);
+            yieldZoneMesh.rotation.x = Math.PI / 2;
+            yieldZoneMesh.position.set(0, 0, -20);
+            scene.add(yieldZoneMesh);
 
+            // 애니메이션 루프
             function animate() {
                 requestAnimationFrame(animate);
-                updateCamera();
                 renderer.render(scene, camera);
             }
             animate();
         });
+
+        // AI 에이전트 시뮬레이션 및 API 코드 실시간 스크립팅
+        function runAiAgent() {
+            var inputTxt = document.getElementById('aiInput').value;
+            var chatBox = document.getElementById('chatBox');
+
+            // 1. 유저 메시지 출력
+            chatBox.innerHTML += '<div class="ai-msg user-msg">> User: ' + inputTxt + '</div>';
+
+            // 2. AI 에이전트 PLAXIS API 코드 생성 프로세스 시뮬레이션
+            setTimeout(function() {
+                chatBox.innerHTML += '<div class="ai-msg agent-msg">[AI 에이전트] 자연어 해석 중... ➔ PLAXIS Scripting API 변환</div>';
+                chatBox.innerHTML += '<div class="ai-msg plaxis-code">>>> plx.new()\n>>> g_o.borehole(0, 0)\n>>> g_o.mesh(3D_Solid)\n>>> g_o.calculate()</div>';
+                chatBox.scrollTop = chatBox.scrollHeight;
+            }, 600);
+
+            // 3. 클라우드 렌더링 및 3D 파괴 영역 업데이트
+            setTimeout(function() {
+                // 3D 소성 파괴 컨투어 강조
+                yieldZoneMesh.material.color.setHex(0xff1744);
+                yieldZoneMesh.scale.set(1.3, 1.0, 1.3);
+
+                chatBox.innerHTML += '<div class="ai-msg agent-msg">[AI 에이전트] 3D 수치해석 완료.</div>';
+                chatBox.innerHTML += '<div class="ai-msg">------------------------------</div>';
+                chatBox.innerHTML += '<div class="ai-msg">• STA 20~40m 3D FS: <b>0.92 (NG)</b></div>';
+                chatBox.innerHTML += '<div class="ai-msg">• 파괴 형태: <b>상반 천단 소성 영역 확장</b></div>';
+                chatBox.innerHTML += '<div class="status-badge">판정 결과: NG (강관다단 보강 필요)</div>';
+                chatBox.scrollTop = chatBox.scrollHeight;
+            }, 1500);
+        }
     </script>
 </body>
 </html>
 """
 
 # ======================================================================
-# 4. Streamlit 화면 레이아웃 (3D 지반 해석 및 OK/NG 결과)
+# 3. Streamlit 대시보드 레이아웃
 # ======================================================================
-col_view, col_fea = st.columns([1.6, 1.4])
+components.html(ai_plaxis_web_html, height=620)
 
-with col_view:
-    st.subheader("🎥 3D 지반 요소망(Solid Mesh) 연동 뷰어")
-    components.html(threejs_3d_ground_html, height=580)
+st.divider()
 
-with col_fea:
-    st.subheader("🪨 3D 지반-터널 수치해석 연산 (GTS NX 3D)")
+# 하단 파이썬 제어 대시보드
+col_ctrl1, col_ctrl2 = st.columns(2)
 
-    depth_val = st.number_input("3D 토심 H (m)", value=35.0, step=5.0)
-    sig_ci_val = st.number_input("암석 일축압축강도 σci (MPa)", value=50.0, step=5.0) * 1000.0
+with col_ctrl1:
+    st.subheader("⚙️ AI 에이전트 파라미터 제어")
+    st.selectbox("AI 에이전트 연동 모델", ["OpenAI GPT-4o Agent", "Bentley iTwin AI Engine", "Claude 3.5 Sonnet"])
+    st.slider("지반 불확실성 가중치 (Monte Carlo)", 0.0, 1.0, 0.15)
 
-    st.markdown("---")
-    st.markdown("##### **[3D 지반 구간별 Hoek-Brown 파괴 안전율(FS)]**")
-
-    for idx, sec in enumerate(st.session_state.sections):
-        solver_3d = Ground3DFEASolver(depth=depth_val, rmr=sec["rmr"], gsi=sec["gsi"], sig_ci=sig_ci_val)
-        sig_1, sig_3 = solver_3d.calculate_3d_ground_stress()
-        fs_3d, status_3d = solver_3d.evaluate_hoek_brown_3d(sig_1, sig_3)
-
-        with st.expander(f"📌 구간 {idx+1}: STA {sec['start_sta']}m ~ {sec['end_sta']}m ({sec['pattern']})", expanded=True):
-            st.write(f"• **지반 GSI 지수:** {sec['gsi']} | **최소주응력 σ3:** {sig_3:.1f} kPa")
-            st.write(f"• **3D Hoek-Brown 파괴 안전율 (FS):** **{fs_3d:.2f}**")
-            
-            if "OK" in status_3d:
-                st.success(f"3D 지반 상태: **{status_3d}** 🟢")
-            else:
-                st.error(f"3D 지반 상태: **{status_3d}** 🔴")
-
-    st.divider()
-    if st.button("🚀 3D 지반 요소망 GTS NX 파일 도출"):
-        st.success("3D 체적 요소(3D Solid Ground Mesh)가 포함된 GTS NX 포맷 데이터 완정 출력을 수행했습니다!")
+with col_ctrl2:
+    st.subheader("📤 GTS NX / PLAXIS 클라우드 내보내기")
+    if st.button("🚀 생성된 3D FEA 스크립트(.py / .mct) 내보내기"):
+        st.success("AI 에이전트가 자동 작성한 PLAXIS Python API 및 GTS NX MCT 스크립트가 도출되었습니다!")
