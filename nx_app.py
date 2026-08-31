@@ -16,18 +16,18 @@ except ModuleNotFoundError:
 # 1. 페이지 기본 설정
 # ======================================================================
 st.set_page_config(
-    page_title="GTS NX / PLAXIS 3D - 측점별 DXF 모델 3D 반영 연산기",
-    page_icon="🏗️",
+    page_title="위성 지도 & 측점별 DXF 3D 지반 연계 해석기",
+    page_icon="🌐",
     layout="wide"
 )
 
-st.title("🏗️ 3D 지반 내 측점별 DXF 모델 반영 & PLAXIS 3D 연계 해석기")
-st.markdown("측점 구간별(**STA 시점 ~ STA 종점**)로 적용할 **DXF 도면을 개별 업로드**하여 3D 지반 단면 및 수치해석에 실시간 반영합니다.")
+st.title("🌐 위성 지도 + 측점별 DXF 모델 3D 연계 해석 엔진")
+st.markdown("위성 지도 노선과 측점 구간별(**STA 시점 ~ STA 종점**) **DXF 도면 파일**을 결합하여 3D 지반 및 수치해석(OK/NG)에 반영합니다.")
 
 st.divider()
 
 # ======================================================================
-# 2. DXF 단면 파서 & 3D 메시 매핑 로직
+# 2. DXF 단면 파서 Class
 # ======================================================================
 class DXFSectionModelParser:
     """업로드된 DXF 파일의 터널 굴착선 및 지보 부재 수치를 정밀 파싱"""
@@ -70,54 +70,103 @@ if "dxf_schedule" not in st.session_state:
     ]
 
 # ======================================================================
-# 3. Three.js - 측점별 DXF 모델 3D 파이프/메쉬 실시간 적용 HTML/JS
+# 3. 위성 지도(Leaflet) + Three.js 3D 지반 통합 HTML/JS
 # ======================================================================
-threejs_dxf_mapping_html = """
+integrated_map_3d_html = """
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8" />
     <style>
         body { margin: 0; padding: 0; overflow: hidden; background-color: #0b0b10; font-family: sans-serif; }
-        #canvas-container { width: 100%; height: 580px; position: relative; }
-        .roadview-nav {
-            position: absolute; top: 12px; left: 12px; z-index: 100;
-            background: rgba(0, 0, 0, 0.90); color: white; padding: 12px;
-            border-radius: 8px; font-size: 12px; border: 1px solid #00e676;
-        }
-        .sta-btn-group { display: flex; gap: 6px; margin-top: 8px; }
-        .sta-btn {
-            background: #2196f3; color: white; border: none; padding: 6px 10px;
-            border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 11px;
-        }
-        .sta-btn.active { background: #00e676; color: black; }
-        .legend-box {
-            position: absolute; bottom: 12px; left: 12px; z-index: 100;
-            background: rgba(0, 0, 0, 0.85); color: white; padding: 8px 12px;
+        #wrapper { display: flex; flex-direction: column; width: 100%; height: 600px; }
+        #map-container { width: 100%; height: 260px; position: relative; border-bottom: 2px solid #333; }
+        #canvas-container { width: 100%; height: 340px; position: relative; }
+        
+        #map { width: 100%; height: 100%; }
+        
+        .map-overlay {
+            position: absolute; top: 10px; right: 10px; z-index: 1000;
+            background: rgba(0, 0, 0, 0.90); color: white; padding: 8px 12px;
             border-radius: 6px; font-size: 11px;
         }
+        .sta-badge {
+            background: #2196F3; color: white; padding: 2px 6px; border-radius: 4px;
+            font-weight: bold; font-family: monospace; font-size: 11px;
+        }
+        
+        .roadview-nav {
+            position: absolute; top: 10px; left: 10px; z-index: 100;
+            background: rgba(0, 0, 0, 0.90); color: white; padding: 8px 12px;
+            border-radius: 6px; font-size: 11px; border: 1px solid #00e676;
+        }
+        .sta-btn-group { display: flex; gap: 4px; margin-top: 4px; }
+        .sta-btn {
+            background: #2196f3; color: white; border: none; padding: 4px 8px;
+            border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 10px;
+        }
+        .sta-btn.active { background: #00e676; color: black; }
     </style>
+    <!-- Leaflet & Three.js CDN -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
-    <div id="canvas-container">
-        <div class="roadview-nav">
-            <b>📍 측점별 DXF 적용 3D 로드뷰 탐색</b>
-            <div class="sta-btn-group">
-                <button class="sta-btn active" onclick="moveToSta(0)">STA 0+000 (DXF 1)</button>
-                <button class="sta-btn" onclick="moveToSta(20)">STA 0+020 (DXF 2)</button>
-                <button class="sta-btn" onclick="moveToSta(40)">STA 0+040 (DXF 3)</button>
+    <div id="wrapper">
+        <!-- 1. 위성 기반 지도 (상단) -->
+        <div id="map-container">
+            <div id="map"></div>
+            <div class="map-overlay">
+                <b>🌍 위성 기반 노선 지도</b><br>
+                <span>측점 연장: </span><span id="current-sta" class="sta-badge">STA 0+000.00</span>
             </div>
         </div>
-        <div class="legend-box">
-            <b>🎨 측점 DXF 반영 형상:</b><br>
-            🟡 STA 0~20m: DXF 1 (Pattern III) | 🟣 STA 20~40m: DXF 2 (Pattern V 강관보강) | 🟢 STA 40~60m: DXF 3 (Pattern II)
+
+        <!-- 2. 3D 지반 & DXF 연동 로드뷰 (하단) -->
+        <div id="canvas-container">
+            <div class="roadview-nav">
+                <b>📍 3D 지반 & DXF 측점 모델링</b>
+                <div class="sta-btn-group">
+                    <button class="sta-btn active" onclick="moveToSta(0)">STA 0m (DXF 1)</button>
+                    <button class="sta-btn" onclick="moveToSta(20)">STA 20m (DXF 2)</button>
+                    <button class="sta-btn" onclick="moveToSta(40)">STA 40m (DXF 3)</button>
+                </div>
+            </div>
         </div>
     </div>
 
     <script>
-        var targetZ = 10;
-        var currentZ = 10;
+        function formatStation(meters) {
+            var k = Math.floor(meters / 1000);
+            var m = (meters % 1000).toFixed(2);
+            var mStr = (m < 100) ? (m < 10 ? "00" + m : "0" + m) : m;
+            return "STA " + k + "+" + mStr;
+        }
+
+        // ======================================================================
+        // A. Leaflet 위성 지도 모듈
+        // ======================================================================
+        var map = L.map('map').setView([37.5, 128.3], 13);
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Esri Satellite', maxZoom: 18
+        }).addTo(map);
+
+        var points = [[37.5, 128.28], [37.505, 128.31], [37.51, 128.33]];
+        var polyline = L.polyline(points, { color: '#00e676', weight: 4 }).addTo(map);
+
+        points.forEach(function(pt, idx) {
+            L.circleMarker(pt, { color: '#fff', fillColor: '#2196F3', fillOpacity: 1, radius: 5 })
+                .addTo(map)
+                .bindPopup("<b>" + formatStation(idx * 200) + "</b>");
+        });
+
+        document.getElementById('current-sta').innerText = formatStation(400);
+
+        // ======================================================================
+        // B. Three.js 3D 지반 & DXF 모듈
+        // ======================================================================
+        var targetZ = 10, currentZ = 10;
 
         function moveToSta(sta) {
             var btns = document.querySelectorAll('.sta-btn');
@@ -133,16 +182,15 @@ threejs_dxf_mapping_html = """
             scene.background = new THREE.Color(0x0a0a0f);
             scene.fog = new THREE.FogExp2(0x0a0a0f, 0.012);
 
-            var camera = new THREE.PerspectiveCamera(70, container.clientWidth / 580, 0.1, 1000);
+            var camera = new THREE.PerspectiveCamera(70, container.clientWidth / 340, 0.1, 1000);
             var renderer = new THREE.WebGLRenderer({ antialias: true });
-            renderer.setSize(container.clientWidth, 580);
+            renderer.setSize(container.clientWidth, 340);
             renderer.setPixelRatio(window.devicePixelRatio);
             container.appendChild(renderer.domElement);
 
             var isDragging = false;
             var previousMousePosition = { x: 0, y: 0 };
-            var cameraTheta = 0;
-            var cameraPhi = Math.PI / 2.3;
+            var cameraTheta = 0, cameraPhi = Math.PI / 2.3;
 
             function updateCamera() {
                 currentZ += (targetZ - currentZ) * 0.08;
@@ -172,21 +220,18 @@ threejs_dxf_mapping_html = """
 
             var ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
             scene.add(ambientLight);
+            var light = new THREE.PointLight(0xffd54f, 1.2, 25);
+            light.position.set(0, 4.5, -10);
+            scene.add(light);
 
-            for (var lz = -70; lz <= 10; lz += 20) {
-                var light = new THREE.PointLight(0xffd54f, 1.2, 25);
-                light.position.set(0, 4.5, lz);
-                scene.add(light);
-            }
-
-            // 1. 3D 지반 체적 요소망
+            // 3D 지반 체적
             var groundGeo = new THREE.BoxGeometry(40, 28, 80);
             var groundMat = new THREE.MeshStandardMaterial({ color: 0x333338, wireframe: true, transparent: true, opacity: 0.3 });
             var groundMesh = new THREE.Mesh(groundGeo, groundMat);
             groundMesh.position.set(0, 3, -20);
             scene.add(groundMesh);
 
-            // 2. NATM 터널 3D 형상
+            // 3D NATM 터널
             var shape = new THREE.Shape();
             var R = 6.2, H_wall = 2.5, W_base = 6.0;
             shape.moveTo(-W_base, -H_wall);
@@ -204,23 +249,7 @@ threejs_dxf_mapping_html = """
             tunnelMesh.position.set(0, 0, -60);
             scene.add(tunnelMesh);
 
-            // 3. DXF 반영 지보격자 (구간별 색상)
-            var matPat3 = new THREE.LineBasicMaterial({ color: 0xffeb3b, linewidth: 3 });
-            var matPat5 = new THREE.LineBasicMaterial({ color: 0xab47bc, linewidth: 4 }); // DXF 2: 강관보강 (보라)
-            var matPat2 = new THREE.LineBasicMaterial({ color: 0x00e676, linewidth: 2 });
-
-            for (var rz = -55; rz <= 15; rz += 3.0) {
-                var edges = new THREE.EdgesGeometry(tunnelGeo);
-                var currentMat = matPat3;
-                if (rz < -30) currentMat = matPat2;
-                else if (rz < -5) currentMat = matPat5;
-
-                var ribLine = new THREE.LineSegments(edges, currentMat);
-                ribLine.position.set(0, 0, rz);
-                scene.add(ribLine);
-            }
-
-            // DXF 2 반영 구간 (STA 20~40m 강관다단 훠폴링 파이프)
+            // 강관다단 훠폴링 파이프 (DXF 2 반영)
             var pipeMat = new THREE.MeshBasicMaterial({ color: 0xab47bc });
             for (var pAngle = 0.3; pAngle <= Math.PI - 0.3; pAngle += 0.25) {
                 var pipeGeo = new THREE.CylinderGeometry(0.12, 0.12, 22, 8);
@@ -245,16 +274,16 @@ threejs_dxf_mapping_html = """
 """
 
 # ======================================================================
-# 4. Streamlit 화면 레이아웃 (측점별 DXF 파일 업로드 칸 & 3D 연동)
+# 4. Streamlit 화면 레이아웃
 # ======================================================================
 col_view, col_schedule = st.columns([1.6, 1.4])
 
 with col_view:
-    st.subheader("🎥 3D 지반 내 측점별 DXF 모델 렌더링")
-    components.html(threejs_dxf_mapping_html, height=580)
+    st.subheader("🌐 위성 지도 (상단) & 3D 지반 로드뷰 (하단)")
+    components.html(integrated_map_3d_html, height=610)
 
 with col_schedule:
-    st.subheader("📁 측점별 DXF 모델 지정 & 3D 지반 연동 설정")
+    st.subheader("📁 측점별 DXF 모델 지정 & 3D 지반 연동")
 
     st.markdown("##### **[측점(STA) 구간별 DXF 파일 매핑 테이블]**")
 
@@ -274,7 +303,7 @@ with col_schedule:
     updated_dxf_list = []
     parser = DXFSectionModelParser()
 
-    # 측점 구간별 DXF 파일 업로드 및 모델 파싱 UI
+    # 측점 구간별 DXF 파일 업로드 및 파싱 UI
     for idx, sec in enumerate(st.session_state.dxf_schedule):
         with st.expander(f"📌 [구간 {idx+1}] STA {sec['start_sta']}m ~ STA {sec['end_sta']}m DXF 지정", expanded=True):
             c1, c2 = st.columns([1.2, 1.2])
@@ -282,10 +311,8 @@ with col_schedule:
                 s_sta = st.number_input(f"시점 STA (m)", value=sec["start_sta"], step=5, key=f"s_sta_{idx}")
                 e_sta = st.number_input(f"종점 STA (m)", value=sec["end_sta"], step=5, key=f"e_sta_{idx}")
             with c2:
-                # 측점별 DXF 파일 개별 업로드 칸 ★
                 uploaded_sec_dxf = st.file_uploader(f"구간 {idx+1} DXF 파일 업로드", type=["dxf"], key=f"dxf_file_{idx}")
 
-            # 업로드된 DXF가 있을 경우 파싱 수치 반영
             if uploaded_sec_dxf:
                 parsed_info = parser.parse_dxf_entities(uploaded_sec_dxf)
                 sec["radius"] = parsed_info["radius"]
@@ -295,7 +322,7 @@ with col_schedule:
             else:
                 st.info(f"📄 현재 연결된 DXF: `{sec['dxf_name']}`")
 
-            # 수치 기반 3D 지반 해석 결과 (OK/NG)
+            # 3D 지반 수치해석 결과 (OK/NG)
             u_crown = (35.0 * 23.0 * sec["radius"] / 1500000.0) * 1000.0
             sec_res = "OK (안전)" if u_crown <= 20.0 else "NG (보강 필요)"
 
