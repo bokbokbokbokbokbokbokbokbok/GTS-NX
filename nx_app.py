@@ -12,12 +12,12 @@ st.set_page_config(
 )
 
 st.title("🏢 3D 거리뷰(Street View) 터널 모식화 & OK / NG 검토기")
-st.markdown("마우스와 키보드로 **거리뷰처럼 3D 공간 내부를 360도 탐색**하고 구조 안전성(OK/NG)을 직관적으로 확인하세요.")
+st.markdown("마우스로 **3D 공간 내부를 360도 탐색**하고 구조 안전성(OK/NG)을 확인하세요.")
 
 st.divider()
 
 # ======================================================================
-# 2. Three.js 기반 3D 거리뷰 뷰어 HTML/JS
+# 2. Three.js 내장 방식 3D 거리뷰 뷰어 HTML/JS (오류 해결 완결판)
 # ======================================================================
 threejs_streetview_html = """
 <!DOCTYPE html>
@@ -25,120 +25,145 @@ threejs_streetview_html = """
 <head>
     <meta charset="utf-8" />
     <style>
-        body { margin: 0; overflow: hidden; font-family: sans-serif; }
+        body { margin: 0; padding: 0; overflow: hidden; background-color: #111118; font-family: sans-serif; }
         #canvas-container { width: 100%; height: 580px; position: relative; }
         .streetview-overlay {
             position: absolute; top: 12px; left: 12px; z-index: 100;
             background: rgba(0, 0, 0, 0.85); color: #00e676; padding: 10px 14px;
             border-radius: 8px; font-size: 12px; border: 1px solid #00e676;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5); pointer-events: none;
         }
         .instruction { color: #ffffff; font-size: 11px; margin-top: 4px; }
     </style>
-    <!-- Three.js 3D 라이브러리 및 OrbitControls -->
+    <!-- 단일 검증 CDN 활용 -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 </head>
 <body>
     <div id="canvas-container">
         <div class="streetview-overlay">
             <b>🎥 3D 거리뷰(First-Person View) 모드</b>
             <div class="instruction">
-                • <b>마우스 드래그:</b> 360도 화면 회전<br>
-                • <b>휠 스크롤:</b> 줌 인 / 줌 아웃 (터널 내부 진입 가능)<br>
-                • <b>우클릭 드래그:</b> 시점 이동 (Pan)
+                • <b>마우스 드래그:</b> 360도 시점 회전<br>
+                • <b>휠 스크롤:</b> 줌 인 / 줌 아웃 (터널 내부 진입)<br>
             </div>
         </div>
     </div>
 
     <script>
-        const container = document.getElementById('canvas-container');
+        window.addEventListener('load', function() {
+            const container = document.getElementById('canvas-container');
 
-        // 1. Scene, Camera, Renderer 생성 (투영 카메라로 거리뷰 구현)
-        const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x111118);
-        scene.fog = new THREE.FogExp2(0x111118, 0.015);
+            // 1. Scene, Camera, Renderer 생성
+            const scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x111118);
+            scene.fog = new THREE.FogExp2(0x111118, 0.015);
 
-        const camera = new THREE.PerspectiveCamera(75, container.clientWidth / 580, 0.1, 1000);
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setSize(container.clientWidth, 580);
-        renderer.setPixelRatio(window.devicePixelRatio);
-        container.appendChild(renderer.domElement);
-
-        // 2. 거리뷰 조종기 (OrbitControls)
-        const controls = new THREE.OrbitControls(camera, renderer.domElement);
-        controls.enableDamping = true;
-        controls.dampingFactor = 0.05;
-
-        // 초기 카메라 위치 (터널 입구 바로 앞 - 거리뷰 시점)
-        camera.position.set(0, 1.5, 25);
-        controls.target.set(0, 0, -20);
-        controls.update();
-
-        # 3. 조명 (Light)
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
-        scene.add(ambientLight);
-
-        const pointLight = new THREE.PointLight(0xffeb3b, 1.5, 50);
-        pointLight.position.set(0, 4, 0);
-        scene.add(pointLight);
-
-        // 4. 지표면 그리드 (Ground)
-        const gridHelper = new THREE.GridHelper(100, 40, 0x444444, 0x222222);
-        gridHelper.position.y = -3;
-        scene.add(gridHelper);
-
-        // 5. 3D 터널 라이너 (원통형 메시)
-        const tunnelRadius = 6.5;
-        const tunnelLength = 80;
-        const tunnelGeo = new THREE.CylinderGeometry(tunnelRadius, tunnelRadius, tunnelLength, 32, 40, true, 0, Math.PI);
-        const tunnelMat = new THREE.MeshStandardMaterial({
-            color: 0x37474f,
-            side: THREE.DoubleSide,
-            wireframe: false,
-            roughness: 0.6
-        });
-        const tunnelMesh = new THREE.Mesh(tunnelGeo, tunnelMat);
-        tunnelMesh.rotation.x = Math.PI / 2;
-        tunnelMesh.position.set(0, 0, -20);
-        scene.add(tunnelMesh);
-
-        // 터널 격자 와이어프레임 강조
-        const wireframeGeo = new THREE.WireframeGeometry(tunnelGeo);
-        const wireframeMat = new THREE.LineBasicMaterial({ color: 0x2196f3, linewidth: 1 });
-        const wireframe = new THREE.LineSegments(wireframeGeo, wireframeMat);
-        wireframe.rotation.x = Math.PI / 2;
-        wireframe.position.set(0, 0, -20);
-        scene.add(wireframe);
-
-        // 6. 3D 록볼트 방사형 보강재 (Red Rods)
-        const boltMat = new THREE.MeshBasicMaterial({ color: 0xff1744 });
-        for (let z = -55; z <= 15; z += 6) {
-            for (let angle = 0.3; angle <= Math.PI - 0.3; angle += 0.45) {
-                const boltGeo = new THREE.CylinderGeometry(0.1, 0.1, 3.5, 8);
-                const bolt = new THREE.Mesh(boltGeo, boltMat);
-                
-                const bx = (tunnelRadius + 1.75) * Math.cos(angle);
-                const by = (tunnelRadius + 1.75) * Math.sin(angle);
-                
-                bolt.position.set(bx, by - 3, z);
-                bolt.rotation.z = angle - Math.PI / 2;
-                scene.add(bolt);
-            }
-        }
-
-        // 7. 애니메이션 루프 (거리뷰 실시간 렌더링)
-        function animate() {
-            requestAnimationFrame(animate);
-            controls.update();
-            renderer.render(scene, camera);
-        }
-        animate();
-
-        window.addEventListener('resize', () => {
-            camera.aspect = container.clientWidth / 580;
-            camera.updateProjectionMatrix();
+            const camera = new THREE.PerspectiveCamera(75, container.clientWidth / 580, 0.1, 1000);
+            const renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(container.clientWidth, 580);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            container.appendChild(renderer.domElement);
+
+            // 2. 외부 라이브러리 없이 자체 마우스 회전/줌 조종 모듈 구현
+            let isDragging = false;
+            let previousMousePosition = { x: 0, y: 0 };
+            let cameraRadius = 25;
+            let cameraTheta = 0;
+            let cameraPhi = Math.PI / 4;
+
+            function updateCameraPosition() {
+                camera.position.x = cameraRadius * Math.sin(cameraPhi) * Math.sin(cameraTheta);
+                camera.position.y = cameraRadius * Math.cos(cameraPhi) + 1.5;
+                camera.position.z = cameraRadius * Math.sin(cameraPhi) * Math.cos(cameraTheta) - 20;
+                camera.lookAt(0, 0, -20);
+            }
+            updateCameraPosition();
+
+            renderer.domElement.addEventListener('mousedown', function(e) {
+                isDragging = true;
+            });
+
+            renderer.domElement.addEventListener('mousemove', function(e) {
+                if (isDragging) {
+                    const deltaX = e.clientX - previousMousePosition.x;
+                    const deltaY = e.clientY - previousMousePosition.y;
+
+                    cameraTheta -= deltaX * 0.005;
+                    cameraPhi -= deltaY * 0.005;
+                    cameraPhi = Math.max(0.1, Math.min(Math.PI - 0.1, cameraPhi));
+
+                    updateCameraPosition();
+                }
+                previousMousePosition = { x: e.clientX, y: e.clientY };
+            });
+
+            window.addEventListener('mouseup', function() {
+                isDragging = false;
+            });
+
+            renderer.domElement.addEventListener('wheel', function(e) {
+                cameraRadius += e.deltaY * 0.02;
+                cameraRadius = Math.max(2, Math.min(60, cameraRadius));
+                updateCameraPosition();
+            });
+
+            // 3. 조명 (Light)
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+            scene.add(ambientLight);
+
+            const pointLight = new THREE.PointLight(0xffeb3b, 1.5, 60);
+            pointLight.position.set(0, 5, -10);
+            scene.add(pointLight);
+
+            // 4. 지표면 그리드
+            const gridHelper = new THREE.GridHelper(100, 40, 0x444444, 0x222222);
+            gridHelper.position.y = -3;
+            scene.add(gridHelper);
+
+            // 5. 3D 터널 라이너 (아치형)
+            const tunnelRadius = 6.5;
+            const tunnelLength = 80;
+            const tunnelGeo = new THREE.CylinderGeometry(tunnelRadius, tunnelRadius, tunnelLength, 32, 40, true, 0, Math.PI);
+            const tunnelMat = new THREE.MeshStandardMaterial({
+                color: 0x37474f,
+                side: THREE.DoubleSide,
+                roughness: 0.6
+            });
+            const tunnelMesh = new THREE.Mesh(tunnelGeo, tunnelMat);
+            tunnelMesh.rotation.x = Math.PI / 2;
+            tunnelMesh.position.set(0, 0, -20);
+            scene.add(tunnelMesh);
+
+            // 터널 격자 와이어프레임
+            const wireframeGeo = new THREE.WireframeGeometry(tunnelGeo);
+            const wireframeMat = new THREE.LineBasicMaterial({ color: 0x2196f3 });
+            const wireframe = new THREE.LineSegments(wireframeGeo, wireframeMat);
+            wireframe.rotation.x = Math.PI / 2;
+            wireframe.position.set(0, 0, -20);
+            scene.add(wireframe);
+
+            // 6. 3D 록볼트 방사형 보강재 (Red Rods)
+            const boltMat = new THREE.MeshBasicMaterial({ color: 0xff1744 });
+            for (let z = -55; z <= 15; z += 6) {
+                for (let angle = 0.3; angle <= Math.PI - 0.3; angle += 0.45) {
+                    const boltGeo = new THREE.CylinderGeometry(0.1, 0.1, 3.5, 8);
+                    const bolt = new THREE.Mesh(boltGeo, boltMat);
+                    
+                    const bx = (tunnelRadius + 1.75) * Math.cos(angle);
+                    const by = (tunnelRadius + 1.75) * Math.sin(angle);
+                    
+                    bolt.position.set(bx, by - 3, z);
+                    bolt.rotation.z = angle - Math.PI / 2;
+                    scene.add(bolt);
+                }
+            }
+
+            // 7. 애니메이션 루프
+            function animate() {
+                requestAnimationFrame(animate);
+                renderer.render(scene, camera);
+            }
+            animate();
         });
     </script>
 </body>
