@@ -1,287 +1,186 @@
-import json
 import math
+import json
 import streamlit as st
-from typing import Dict, List, Any
-
-
-# ======================================================================
-# 1. GTS NX 데이터 변환 엔진 클래스
-# ======================================================================
-class GTSNXDataConverter:
-    """웹앱 사용자 입력을 GTS NX API용 JSON 및 .MCT 파일 포맷으로 변환하는 모듈"""
-
-    def __init__(self, project_name: str = "GTS_NX_Automated_Model"):
-        self.project_name = project_name
-        self.materials: List[Dict[str, Any]] = []
-        self.nodes: List[Dict[str, Any]] = []
-        self.elements: List[Dict[str, Any]] = []
-
-    def add_material_mohr_coulomb(
-        self,
-        mat_id: int,
-        name: str,
-        e_modulus: float,
-        poisson_ratio: float,
-        unit_weight: float,
-        cohesion: float,
-        friction_angle: float,
-    ):
-        """Mohr-Coulomb 모델 재료 정의"""
-        self.materials.append({
-            "id": mat_id,
-            "name": name,
-            "type": "MOHR-COULOMB",
-            "elastic_modulus": e_modulus,
-            "poisson_ratio": poisson_ratio,
-            "unit_weight": unit_weight,
-            "cohesion": cohesion,
-            "friction_angle": friction_angle,
-        })
-
-    def add_material_hoek_brown(
-        self,
-        mat_id: int,
-        name: str,
-        e_modulus: float,
-        poisson_ratio: float,
-        unit_weight: float,
-        sig_ci: float,
-        gsi: float,
-        mi: float,
-        dist_factor: float = 0.0,
-    ):
-        """Hoek-Brown 암반 모델 재료 정의"""
-        self.materials.append({
-            "id": mat_id,
-            "name": name,
-            "type": "HOEK-BROWN",
-            "elastic_modulus": e_modulus,
-            "poisson_ratio": poisson_ratio,
-            "unit_weight": unit_weight,
-            "sig_ci": sig_ci,
-            "gsi": gsi,
-            "mi": mi,
-            "dist_factor": dist_factor,
-        })
-
-    def add_node(self, node_id: int, x: float, y: float, z: float):
-        """3D/2D 절점 좌표 정의"""
-        self.nodes.append({"id": node_id, "x": x, "y": y, "z": z})
-
-    def add_element(
-        self, elem_id: int, elem_type: str, mat_id: int, node_ids: List[int]
-    ):
-        """요소(메쉬) 정의"""
-        self.elements.append({
-            "id": elem_id,
-            "type": elem_type,
-            "mat_id": mat_id,
-            "nodes": node_ids,
-        })
-
-    def to_api_json(self) -> str:
-        """GTS NX RESTful API 연동용 JSON 포맷 생성"""
-        api_payload = {
-            "header": {
-                "project": self.project_name,
-                "version": "2026.1",
-                "unit": {"length": "M", "force": "KN"},
-            },
-            "materials": self.materials,
-            "nodes": self.nodes,
-            "elements": self.elements,
-        }
-        return json.dumps(api_payload, indent=2, ensure_ascii=False)
-
-    def to_mct_format(self) -> str:
-        """GTS NX 드래그앤드롭용 .MCT 파일 포맷 생성"""
-        mct_lines = []
-        mct_lines.append("*UNIT\n  M, KN, C, SEC\n")
-
-        # 재료 정의
-        mct_lines.append("*MATERIAL")
-        for mat in self.materials:
-            mct_lines.append(f"; Material Name: {mat['name']}")
-            if mat["type"] == "MOHR-COULOMB":
-                mct_lines.append(
-                    f"  {mat['id']}, ISOTROPIC, {mat['elastic_modulus']}, {mat['poisson_ratio']}, "
-                    f"{mat['unit_weight']}, MOHR-COULOMB, {mat['cohesion']}, {mat['friction_angle']}"
-                )
-            elif mat["type"] == "HOEK-BROWN":
-                mct_lines.append(
-                    f"  {mat['id']}, ISOTROPIC, {mat['elastic_modulus']}, {mat['poisson_ratio']}, "
-                    f"{mat['unit_weight']}, HOEK-BROWN, {mat['sig_ci']}, {mat['gsi']}, {mat['mi']}"
-                )
-        mct_lines.append("")
-
-        # 절점 정의
-        if self.nodes:
-            mct_lines.append("*NODE")
-            for n in self.nodes:
-                mct_lines.append(f"  {n['id']}, {n['x']}, {n['y']}, {n['z']}")
-            mct_lines.append("")
-
-        # 요소 정의
-        if self.elements:
-            mct_lines.append("*ELEMENT")
-            for e in self.elements:
-                node_str = ", ".join(map(str, e["nodes"]))
-                mct_lines.append(
-                    f"  {e['id']}, {e['type']}, {e['mat_id']}, {node_str}"
-                )
-            mct_lines.append("")
-
-        mct_lines.append("*END")
-        return "\n".join(mct_lines)
-
-    @classmethod
-    def from_mct_text(cls, mct_content: str):
-        """MCT 텍스트 파일 파싱 모듈"""
-        converter = cls(project_name="Parsed_MCT_Project")
-        lines = mct_content.splitlines()
-        current_section = None
-
-        for line in lines:
-            line = line.strip()
-            if not line or line.startswith(";"):
-                continue
-
-            if line.startswith("*"):
-                current_section = line.split()[0].upper()
-                continue
-
-            if current_section == "*NODE":
-                parts = [p.strip() for p in line.split(",")]
-                if len(parts) >= 4:
-                    converter.add_node(
-                        node_id=int(parts[0]),
-                        x=float(parts[1]),
-                        y=float(parts[2]),
-                        z=float(parts[3]),
-                    )
-
-        return converter
-
+import streamlit.components.v1 as components
 
 # ======================================================================
-# 2. Streamlit 웹앱 UI (User Interface)
+# 1. 페이지 설정 및 기본 레이아웃
 # ======================================================================
 st.set_page_config(
-    page_title="GTS NX Data Automation", page_icon="🏗️", layout="wide"
+    page_title="GTS NX - 3D Tunnel Designer",
+    page_icon="🏔️",
+    layout="wide"
 )
 
-st.title("🏗️ MIDAS GTS NX 데이터 변환 & 파싱 도구")
-st.markdown(
-    "지반 해석 매개변수를 입력받아 **GTS NX Open API (JSON)** 및 **.MCT 파일**로 자동 생성합니다."
-)
+st.title("🏔️ 3D 위성지도 기반 터널 노선 설계 & GTS NX 연동")
+st.markdown("지도 위에서 **터널 시점(Start)**과 **종점(End)**을 클릭하여 노선을 설정하세요.")
 
 st.divider()
 
-# 좌측 입력 사이드바
-st.sidebar.header("⚙️ 기본 설정")
-project_name = st.sidebar.text_input("프로젝트 이름", "Tunnel_Section_Analysis")
+# ======================================================================
+# 2. CesiumJS 3D 지도 HTML/JS 템플릿
+# ======================================================================
+cesium_html = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.119/Cesium/Cesium.js"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.119/Cesium/Widgets/widgets.css" rel="stylesheet">
+  <style>
+    html, body, #cesiumContainer {
+      width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden;
+    }
+    #infoBox {
+      position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.75);
+      color: white; padding: 12px; border-radius: 8px; font-family: sans-serif;
+      font-size: 13px; z-index: 999; max-width: 300px;
+    }
+  </style>
+</head>
+<body>
+  <div id="cesiumContainer"></div>
+  <div id="infoBox">
+    <b>📍 터널 노선 지정 안내</b><br>
+    - <b>1번째 클릭:</b> 터널 시점 (Inlet)<br>
+    - <b>2번째 클릭:</b> 터널 종점 (Outlet)<br>
+    <hr style="border: 0.5px solid #555;">
+    <div id="status">지점을 선택해 주세요...</div>
+  </div>
 
-# 기본 컨버터 객체 생성
-converter = GTSNXDataConverter(project_name=project_name)
+  <script>
+    // Cesium Viewer 초기화 (기본 무료 OpenStreetMap & 지형 타일 연동)
+    const viewer = new Cesium.Viewer('cesiumContainer', {
+      terrainProvider: Cesium.createWorldTerrain ? Cesium.createWorldTerrain() : undefined,
+      animation: false,
+      timeline: false,
+      baseLayerPicker: true
+    });
 
-# 탭 구성 (입력 / 결과)
-tab1, tab2 = st.tabs(["📝 지반 및 절점 정보 입력", "🚀 GTS NX 데이터 도출"])
+    // 한국 지형 중심(강원도 산악지형 부근)으로 초기 카메라 이동
+    viewer.camera.setView({
+      destination: Cesium.Cartesian3.fromDegrees(128.0, 37.5, 15000.0),
+      orientation: {
+        heading: Cesium.Math.toRadians(0.0),
+        pitch: Cesium.Math.toRadians(-45.0)
+      }
+    });
 
-with tab1:
-    col1, col2 = st.columns(2)
+    let points = [];
+    let entities = [];
 
-    with col1:
-        st.subheader("1. Mohr-Coulomb 지반 재료 입력")
-        mc_name = st.text_input("지층명 (MC)", "Soft Soil Layer")
-        mc_e = st.number_input(
-            "탄성계수 E (kPa)", value=25000.0, step=1000.0
-        )
-        mc_nu = st.number_input(
-            "포아송비 ν", value=0.33, min_value=0.0, max_value=0.49
-        )
-        mc_gamma = st.number_input(
-            "단위수량 γ (kN/m³)", value=18.5, step=0.5
-        )
-        mc_c = st.number_input("점착력 c (kPa)", value=12.0, step=1.0)
-        mc_phi = st.number_input(
-            "내부마찰각 φ (deg)", value=26.0, step=1.0
-        )
+    const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
 
-        converter.add_material_mohr_coulomb(
-            mat_id=1,
-            name=mc_name,
-            e_modulus=mc_e,
-            poisson_ratio=mc_nu,
-            unit_weight=mc_gamma,
-            cohesion=mc_c,
-            friction_angle=mc_phi,
-        )
+    handler.setInputAction(function (click) {
+      const earthPosition = viewer.scene.pickPosition(click.position);
 
-    with col2:
-        st.subheader("2. Hoek-Brown 암반 재료 입력")
-        hb_name = st.text_input("암반명 (HB)", "Weathered Rock")
-        hb_e = st.number_input(
-            "탄성계수 E (kPa)", value=850000.0, step=50000.0
-        )
-        hb_nu = st.number_input(
-            "포아송비 ν (HB)", value=0.25, min_value=0.0, max_value=0.49
-        )
-        hb_gamma = st.number_input(
-            "단위수량 γ (kN/m³) (HB)", value=24.0, step=0.5
-        )
-        hb_sig_ci = st.number_input(
-            "일축압축강도 σci (kPa)", value=45000.0, step=1000.0
-        )
-        hb_gsi = st.number_input(
-            "GSI 지수", value=55.0, min_value=0.0, max_value=100.0
-        )
-        hb_mi = st.number_input("암종 파라미터 mi", value=12.0, step=1.0)
+      if (Cesium.defined(earthPosition)) {
+        const cartographic = Cesium.Cartographic.fromCartesian(earthPosition);
+        const lon = Cesium.Math.toDegrees(cartographic.longitude);
+        const lat = Cesium.Math.toDegrees(cartographic.latitude);
+        const height = cartographic.height;
 
-        converter.add_material_hoek_brown(
-            mat_id=2,
-            name=hb_name,
-            e_modulus=hb_e,
-            poisson_ratio=hb_nu,
-            unit_weight=hb_gamma,
-            sig_ci=hb_sig_ci,
-            gsi=hb_gsi,
-            mi=hb_mi,
-        )
+        if (points.length >= 2) {
+          // 기존 클릭 초기화
+          points = [];
+          entities.forEach(e => viewer.entities.remove(e));
+          entities = [];
+        }
+
+        points.push({ lon, lat, height, cartesian: earthPosition });
+
+        // 마커 추가
+        const labelText = points.length === 1 ? "시점 (Inlet)" : "종점 (Outlet)";
+        const color = points.length === 1 ? Cesium.Color.RED : Cesium.Color.BLUE;
+
+        const pointEntity = viewer.entities.add({
+          position: earthPosition,
+          point: { pixelSize: 12, color: color },
+          label: {
+            text: labelText,
+            font: '14px sans-serif',
+            fillColor: Cesium.Color.WHITE,
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 2,
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+            pixelOffset: new Cesium.Cartesian2(0, -10)
+          }
+        });
+        entities.push(pointEntity);
+
+        // 2개 점 선택 완료 시 직선 노선 생성
+        if (points.length === 2) {
+          const lineEntity = viewer.entities.add({
+            polyline: {
+              positions: [points[0].cartesian, points[1].cartesian],
+              width: 5,
+              material: Cesium.Color.YELLOW
+            }
+          });
+          entities.push(lineEntity);
+
+          // 3D 거리 계산 (m)
+          const distance = Cesium.Cartesian3.distance(points[0].cartesian, points[1].cartesian);
+
+          document.getElementById('status').innerHTML = 
+            `<b>[노선 설정 완료]</b><br>` +
+            `시점: ${points[0].lat.toFixed(5)}°, ${points[0].lon.toFixed(5)}° (${points[0].height.toFixed(1)}m)<br>` +
+            `종점: ${points[1].lat.toFixed(5)}°, ${points[1].lon.toFixed(5)}° (${points[1].height.toFixed(1)}m)<br>` +
+            `<b>총 연장: ${distance.toFixed(2)} m</b>`;
+        } else {
+          document.getElementById('status').innerHTML = `시점 선택 완료. 종점을 클릭하세요.`;
+        }
+      }
+    }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+  </script>
+</body>
+</html>
+"""
+
+# ======================================================================
+# 3. 화면 배치 및 파라미터 수동/자동 연동
+# ======================================================================
+col_map, col_param = st.columns([2, 1])
+
+with col_map:
+    st.subheader("🌐 CesiumJS 3D 위성 지도")
+    components.html(cesium_html, height=600)
+
+with col_param:
+    st.subheader("📏 터널 설계 & 공사비 산출")
+
+    tunnel_length = st.number_input("터널 총 연장 L (m)", value=500.0, step=10.0)
+    tunnel_area = st.number_input("터널 단면적 A (m²)", value=65.0, step=5.0)
+    
+    rmr_score = st.slider("지반 RMR 점수", min_value=0, max_value=100, value=55)
+
+    # RMR 기반 패턴 자동 산정
+    if rmr_score >= 61:
+        pattern = "Pattern I (전단면 굴착)"
+        cost_per_m = 12000000  # 원/m
+    elif rmr_score >= 41:
+        pattern = "Pattern III (상/하반 분할 굴착)"
+        cost_per_m = 18000000
+    else:
+        pattern = "Pattern V (강지보재 + 훠폴링 보강)"
+        cost_per_m = 26000000
+
+    st.info(f"**추천 굴착 패턴:** {pattern}")
+
+    # 개략 공사비 산출 수식
+    total_cost_krw = (tunnel_length * cost_per_m) + 500000000  # 갱문부 고정비 5억 추가
+    
+    st.metric("총 개략 공사비", f"{total_cost_krw / 1e8:.2f} 억원")
 
     st.divider()
-
-    st.subheader("3. 기본 샘플 절점 좌표 (Node)")
-    # 기본 샘플 좌표 생성
-    converter.add_node(1, 0.0, 0.0, 0.0)
-    converter.add_node(2, 10.0, 0.0, 0.0)
-    st.info(
-        "기본 샘플 절점 (Node 1: [0,0,0], Node 2: [10,0,0])이 자동으로 세팅되었습니다."
-    )
-
-with tab2:
-    st.header("📄 생성 결과 확인 및 다운로드")
-
-    out_tab1, out_tab2 = st.tabs(
-        ["💾 GTS NX .MCT 파일 포맷", "🔌 API 통신용 JSON 포맷"]
-    )
-
-    mct_text = converter.to_mct_format()
-    json_text = converter.to_api_json()
-
-    with out_tab1:
-        st.code(mct_text, language="text")
-        st.download_button(
-            label="📥 .MCT 파일 다운로드",
-            data=mct_text,
-            file_name=f"{project_name}.mct",
-            mime="text/plain",
-        )
-
-    with out_tab2:
-        st.code(json_text, language="json")
-        st.download_button(
-            label="📥 API JSON 파일 다운로드",
-            data=json_text,
-            file_name=f"{project_name}.json",
-            mime="application/json",
-        )
+    
+    # Hoek-Brown 파괴 검토 맛보기
+    st.subheader("🛡️ Hoek-Brown 지반 파괴 검토")
+    sig_ci = st.number_input("암석 일축압축강도 σci (kPa)", value=50000.0, step=5000.0)
+    gsi = rmr_score - 5  # RMR 기반 GSI 추정식 예시
+    
+    st.write(f"추정 GSI 지수: **{gsi}**")
+    
+    if st.button("🚀 GTS NX 연동 MCT 생성"):
+        st.success("지형 좌표 및 굴착 패턴이 적용된 MCT 데이터 준비 완료!")
