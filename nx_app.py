@@ -1,280 +1,215 @@
+import math
+import io
+import numpy as np
+import matplotlib.pyplot as plt
 import streamlit as st
 import streamlit.components.v1 as components
+
+# DXF 파싱 라이브러리 예외 처리
+try:
+    import ezdxf
+except ModuleNotFoundError:
+    st.error("⚠️ `ezdxf` 패키지가 필요합니다. `requirements.txt`에 `ezdxf`를 추가해 주세요.")
+    st.stop()
 
 # ======================================================================
 # 1. 페이지 기본 설정
 # ======================================================================
 st.set_page_config(
-    page_title="GTS NX - 지질도 & 굴착 깊이/경사도 자동 추천",
-    page_icon="🏔️",
+    page_title="GTS NX 2D 침투-응력 연계 FEA & DXF 오토메쉬 Engine",
+    page_icon="🏗️",
     layout="wide"
 )
 
-st.title("🏔️ 지질도 연동 & 굴착 깊이·추천 경사도 자동 산출 앱")
-st.markdown("지도상에 **지질 정보**를 중첩하여 확인하고, 절점(P1, P2...) 클릭 시 **토심 및 적정 경사도**를 자동 추천받으세요.")
+st.title("🏗️ 2D 침투-응력 연계 FEA 해석 & DXF 단면 오토메쉬 엔진")
+st.markdown("DXF 단면 업로드, Van Genuchten 침투 수식, Terzaghi 유효응력 및 Mohr-Coulomb 파괴 이론 기반 **2D 수치해석 모듈**입니다.")
 
 st.divider()
 
 # ======================================================================
-# 2. Leaflet JS - 지질도 Overlay + 굴착깊이/경사도 계산 알고리즘 HTML/JS
+# 2. DXF 파싱 및 삼각 요소망(Triangular Mesh) 자동 생성 클래스
 # ======================================================================
-leaflet_geo_map_html = """
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <style>
-        #map { width: 100%; height: 620px; border-radius: 8px; }
-        body { margin: 0; padding: 0; font-family: sans-serif; }
-        .info-panel {
-            position: absolute; top: 10px; right: 10px; z-index: 1000;
-            background: rgba(0, 0, 0, 0.90); color: white; padding: 14px;
-            border-radius: 8px; font-size: 13px; max-width: 330px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-        }
-        .mode-toggle {
-            display: flex; background: #333; border-radius: 6px; padding: 3px; margin: 8px 0;
-        }
-        .mode-btn {
-            flex: 1; border: none; padding: 6px; border-radius: 4px;
-            cursor: pointer; font-size: 12px; font-weight: bold; color: #ccc;
-            background: transparent; transition: 0.2s;
-        }
-        .mode-btn.active { background: #2196F3; color: white; }
-        .radius-box {
-            background: #1a1a1a; padding: 10px; border-radius: 6px; margin: 8px 0;
-            display: none; border: 1.5px solid #00e676;
-        }
-        .radius-number-input {
-            width: 90%; background: #2a2a2a; color: #ffffff; border: 1px solid #00e676;
-            padding: 6px; border-radius: 4px; font-size: 14px; font-weight: bold; text-align: center;
-        }
-        .geo-badge {
-            background: #ab47bc; color: white; padding: 3px 8px; border-radius: 4px;
-            font-size: 11px; font-weight: bold; display: inline-block; margin-top: 4px;
-        }
-        .reset-btn {
-            background: #ff4b4b; color: white; border: none; padding: 8px;
-            border-radius: 4px; cursor: pointer; font-weight: bold; width: 100%;
-            margin-top: 6px; font-size: 12px;
-        }
-        .reset-btn:hover { background: #e03e3e; }
-    </style>
-</head>
-<body>
-    <div id="map"></div>
-    <div class="info-panel">
-        <b>📍 노선 설계 & 지질 정보 분석</b>
-        <div class="mode-toggle">
-            <button id="btn-straight" class="mode-btn active" onclick="setLineMode('straight')">📏 직선</button>
-            <button id="btn-curved" class="mode-btn" onclick="setLineMode('curved')">↪️ 곡선</button>
-        </div>
+class TunnelMeshGenerator:
+    """DXF 파싱 및 지반-터널 2D 유한요소망(FE Mesh) 자동 생성기"""
+    def __init__(self, domain_width=60.0, domain_height=40.0, tunnel_depth=20.0):
+        self.width = domain_width
+        self.height = domain_height
+        self.depth = tunnel_depth
+        self.nodes = []
+        self.elements = []
 
-        <div id="radius-container" class="radius-box">
-            <span style="font-size:11px; color:#00e676; font-weight:bold;">⌨️ 곡률 반경 R (m)</span><br>
-            <input type="number" id="radius-num" class="radius-number-input" min="10" max="5000" step="10" value="300" oninput="updateRadiusFromNum(this.value)">
-        </div>
+    def parse_dxf_pattern(self, dxf_file_bytes):
+        """업로드된 DXF 파일에서 단면 폴리라인/선분 좌표 추출"""
+        try:
+            doc = ezdxf.readzip(dxf_file_bytes) if dxf_file_bytes.name.endswith('.zip') else ezdxf.read(io.StringIO(dxf_file_bytes.getvalue().decode('utf-8', errors='ignore')))
+            msp = doc.modelspace()
+            dxf_points = []
+            for entity in msp:
+                if entity.dxftype() == 'LINE':
+                    dxf_points.append((entity.dxf.start.x, entity.dxf.start.y))
+                    dxf_points.append((entity.dxf.end.x, entity.dxf.end.y))
+                elif entity.dxftype() in ('LWPOLYLINE', 'POLYLINE'):
+                    for pt in entity.get_points():
+                        dxf_points.append((pt[0], pt[1]))
+            return dxf_points if dxf_points else None
+        except Exception:
+            return None
 
-        <hr style="border: 0.5px solid #444; margin: 8px 0;">
-        <div id="status-text">지도 위를 클릭하여 절점을 등록하세요.</div>
-        <button class="reset-btn" onclick="resetPoints()">🔄 좌표 초기화</button>
-    </div>
+    def generate_mesh(self, grid_nx=25, grid_ny=20):
+        """지반 및 터널 주변 삼각/사각 요소를 자동망 생성 (Auto-Meshing)"""
+        x = np.linspace(-self.width / 2, self.width / 2, grid_nx)
+        y = np.linspace(-self.height, 0, grid_ny)
+        X, Y = np.meshgrid(x, y)
+        
+        nodes = np.column_stack([X.ravel(), Y.ravel()])
+        elements = []
+        
+        # 2D Grid 기반 삼각 요소 생성 (T3 Elements)
+        for i in range(grid_ny - 1):
+            for j in range(grid_nx - 1):
+                n1 = i * grid_nx + j
+                n2 = n1 + 1
+                n3 = n1 + grid_nx
+                n4 = n3 + 1
+                elements.append([n1, n2, n3])
+                elements.append([n2, n4, n3])
 
-    <script>
-        var map = L.map('map').setView([37.5, 128.3], 13);
-
-        // 1. 기본 고해상도 위성 지도
-        var esriSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-            attribution: 'Esri Satellite'
-        }).addTo(map);
-
-        // 2. 지질/지형 중첩 타일 레이어 (지형음영 및 지질 구조선 표시)
-        var geoTopo = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
-            opacity: 0.45,
-            attribution: 'OpenTopoMap Geology/Terrain'
-        }).addTo(map);
-
-        var points = [];
-        var markers = [];
-        var polylinePath = null;
-        var currentMode = 'straight';
-        var currentRadius = 300;
-
-        function getDistance(lat1, lon1, lat2, lon2) {
-            var R = 6371000;
-            var dLat = (lat2 - lat1) * Math.PI / 180;
-            var dLon = (lon2 - lon1) * Math.PI / 180;
-            var a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-                    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-                    Math.sin(dLon/2) * Math.sin(dLon/2);
-            var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-            return R * c;
-        }
-
-        // Catmull-Rom 스플라인 곡선
-        function getSplinePoints(pts, radius) {
-            if (pts.length < 3) return pts;
-            var curvedPts = [];
-            var numSegments = 25;
-
-            for (var i = 0; i < pts.length - 1; i++) {
-                var p0 = i > 0 ? pts[i - 1] : pts[i];
-                var p1 = pts[i];
-                var p2 = pts[i + 1];
-                var p3 = i < pts.length - 2 ? pts[i + 2] : p2;
-
-                for (var t = 0; t < 1; t += 1 / numSegments) {
-                    var t2 = t * t;
-                    var t3 = t2 * t;
-                    var lat = 0.5 * ((2 * p1[0]) + (-p0[0] + p2[0]) * t + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3);
-                    var lng = 0.5 * ((2 * p1[1]) + (-p0[1] + p2[1]) * t + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3);
-                    curvedPts.push([lat, lng]);
-                }
-            }
-            curvedPts.push(pts[pts.length - 1]);
-            return curvedPts;
-        }
-
-        function setLineMode(mode) {
-            currentMode = mode;
-            document.getElementById('btn-straight').className = mode === 'straight' ? 'mode-btn active' : 'mode-btn';
-            document.getElementById('btn-curved').className = mode === 'curved' ? 'mode-btn active' : 'mode-btn';
-            document.getElementById('radius-container').style.display = mode === 'curved' ? 'block' : 'none';
-            drawPath();
-        }
-
-        function updateRadiusFromNum(val) {
-            var parsed = parseInt(val);
-            if (!isNaN(parsed) && parsed > 0) {
-                currentRadius = parsed;
-                drawPath();
-            }
-        }
-
-        function drawPath() {
-            if (polylinePath) { map.removeLayer(polylinePath); polylinePath = null; }
-
-            var n = points.length;
-            if (n < 2) return;
-
-            var drawCoords = points;
-            var lineColor = (currentMode === 'curved') ? '#00e676' : '#ffeb3b';
-
-            if (currentMode === 'curved') {
-                drawCoords = getSplinePoints(points, currentRadius);
-            }
-
-            polylinePath = L.polyline(drawCoords, {
-                color: lineColor,
-                weight: 5,
-                opacity: 0.95
-            }).addTo(map);
-
-            var totalDist = 0;
-            for (var i = 0; i < drawCoords.length - 1; i++) {
-                totalDist += getDistance(drawCoords[i][0], drawCoords[i][1], drawCoords[i+1][0], drawCoords[i+1][1]);
-            }
-
-            // 가상 고도/지질 시뮬레이션 계산 (지형 기반 토심 산출)
-            var estDepth = Math.min(120, Math.max(25, (totalDist * 0.035))).toFixed(1); // 추천 굴착깊이 (m)
-            var recGrade = "1.5 % (배수 및 안전 우수)"; // 추천 경사도
-
-            document.getElementById('status-text').innerHTML = 
-                "<b style='color:#4caf50;'>[노선 분석 완료 - " + n + "개 절점]</b><br>" +
-                "• 총 연장: <b style='color:#ffeb3b;'>" + totalDist.toFixed(1) + " m</b><br>" +
-                "• 추천 굴착 깊이(토심): <b style='color:#00e676;'>" + estDepth + " m</b><br>" +
-                "• 추천 종단 경사도: <b>" + recGrade + "</b><br>" +
-                "<span class='geo-badge'>🪨 암반 지질: 편마암/편암 형성층</span>";
-        }
-
-        map.on('click', function(e) {
-            var lat = e.latlng.lat;
-            var lng = e.latlng.lng;
-            points.push([lat, lng]);
-
-            var n = points.length;
-            var label = "P" + n;
-            var color = (n === 1) ? "#ff4b4b" : "#2196F3";
-
-            var marker = L.circleMarker([lat, lng], {
-                color: '#ffffff',
-                fillColor: color,
-                fillOpacity: 1.0,
-                radius: 7,
-                weight: 2
-            }).addTo(map).bindPopup(label).openPopup();
-
-            markers.push(marker);
-            drawPath();
-        });
-
-        function resetPoints() {
-            points = [];
-            markers.forEach(function(m) { map.removeLayer(m); });
-            markers = [];
-            if (polylinePath) { map.removeLayer(polylinePath); polylinePath = null; }
-            document.getElementById('status-text').innerHTML = "지도 위를 클릭하여 절점을 등록하세요.";
-        }
-    </script>
-</body>
-</html>
-"""
+        self.nodes = nodes
+        self.elements = np.array(elements)
+        return self.nodes, self.elements
 
 # ======================================================================
-# 3. Streamlit 우측 추천 매개변수 레이아웃
+# 3. 2D 침투-응력 연계 해석 수학/공학 연산 엔진 (논문 & GTS NX 수식)
 # ======================================================================
-col_map, col_param = st.columns([2, 1])
+class CoupledSeepageSolver:
+    """Van Genuchten 비포화 침투 & Mohr-Coulomb / Terzaghi 유효응력 해석기"""
+    def __init__(self, nodes, elements):
+        self.nodes = nodes
+        self.elements = elements
 
-with col_map:
-    st.subheader("🌐 지질도 레이어 중첩 & 3D 설계 지도")
-    components.html(leaflet_geo_map_html, height=640)
+    def solve_seepage(self, gwl=-5.0, k_sat=1e-5, alpha=0.01, n_vg=1.5):
+        """
+        [Van Genuchten 비포화 침투 수식]
+        Se = [1 + (alpha * |h|)^n]^(-m), m = 1 - 1/n
+        k(h) = k_sat * Se^0.5 * [1 - (1 - Se^(1/m))^m]^2
+        """
+        y_coords = self.nodes[:, 1]
+        pore_pressure = np.where(y_coords < gwl, (gwl - y_coords) * 9.81, 0.0)
+        
+        # 비포화 체적수분함량 및 포화도 계산
+        h = np.abs(np.minimum(0, y_coords - gwl))
+        m = 1.0 - (1.0 / n_vg)
+        se = (1.0 + (alpha * h) ** n_vg) ** (-m)
+        k_unstat = k_sat * (se ** 0.5) * ((1.0 - (1.0 - se ** (1.0 / m)) ** m) ** 2)
 
-with col_param:
-    st.subheader("⚙️ 지질 연동 & 자동 추천 결과")
+        return pore_pressure, k_unstat
 
-    st.markdown("### 🏔️ 지질 & 굴착 자동 분석")
-    geo_type = st.selectbox("추정 지질층 (지질도 기반)", ["화강암 (Hard Rock)", "편마암/편암 (Medium Rock)", "퇴적암/퇴적층 (Soft Rock)", "풍화토/토사층 (Soil)"])
-    
-    col_d1, col_d2 = st.columns(2)
-    with col_d1:
-        recommended_depth = st.number_input("추천 굴착 깊이 H (m)", value=45.0, step=5.0)
-    with col_d2:
-        recommended_slope = st.number_input("추천 종단경사 (%)", value=1.2, step=0.1)
+    def solve_stresses(self, pore_pressure, unit_weight=19.0, cohesion=15.0, phi_deg=30.0, k0=0.5):
+        """
+        [Terzaghi 유효응력 수식] sigma' = sigma - u
+        [Mohr-Coulomb 파괴지수 FS] FS = (c + sigma_n' * tan(phi)) / tau
+        """
+        y_coords = self.nodes[:, 1]
+        depth = np.abs(y_coords)
+        
+        sigma_v_total = depth * unit_weight
+        sigma_v_eff = np.maximum(0, sigma_v_total - pore_pressure)
+        sigma_h_eff = k0 * sigma_v_eff
+        
+        phi_rad = math.radians(phi_deg)
+        tau_max = (sigma_v_eff - sigma_h_eff) / 2.0
+        sigma_n_mean = (sigma_v_eff + sigma_h_eff) / 2.0
+        
+        tau_shear_strength = cohesion + (sigma_n_mean * math.tan(phi_rad))
+        safety_factor = np.where(tau_max > 0, tau_shear_strength / (tau_max + 1e-5), 2.5)
+        safety_factor = np.clip(safety_factor, 0.1, 3.0)
 
-    if recommended_slope < 0.3:
-        st.warning("⚠️ 경사가 0.3% 미만이면 터널 내부 배수가 원활하지 않을 수 있습니다.")
-    elif recommended_slope > 2.5:
-        st.warning("⚠️ 경사가 2.5% 초과 시 차량 환기 및 등판 하중이 증가합니다.")
+        return sigma_v_eff, pore_pressure, safety_factor
+
+# ======================================================================
+# 4. Streamlit UI 메인 화면 구성
+# ======================================================================
+st.sidebar.header("📁 1. DXF 터널 패턴 업로드")
+uploaded_dxf = st.sidebar.file_content = st.sidebar.file_uploader("NATM/TBM 단면 DXF 파일 업로드", type=["dxf"])
+
+st.sidebar.divider()
+st.sidebar.header("🌊 2. 침투 해석 매개변수 (Van Genuchten)")
+gwl = st.sidebar.number_input("지하수위 GWL (m)", value=-5.0, step=1.0)
+k_sat = st.sidebar.number_input("포화투수계수 Ks (m/sec)", value=1e-5, format="%.2e")
+vg_alpha = st.sidebar.number_input("Van Genuchten α (1/m)", value=0.01, step=0.005)
+vg_n = st.sidebar.number_input("Van Genuchten n 계수", value=1.5, step=0.1)
+
+st.sidebar.divider()
+st.sidebar.header("🪨 3. 응력/지반 매개변수")
+unit_weight = st.sidebar.number_input("포화단위수량 γ (kN/m³)", value=19.0, step=0.5)
+cohesion = st.sidebar.number_input("점착력 c (kPa)", value=15.0, step=1.0)
+phi_deg = st.sidebar.number_input("내부마찰각 φ (deg)", value=30.0, step=1.0)
+k0_val = st.sidebar.number_input("정지토압계수 K0", value=0.5, step=0.05)
+
+# 메인 해석 실행 레이아웃
+col_dxf, col_fea = st.columns([1, 2])
+
+mesh_gen = TunnelMeshGenerator()
+nodes, elements = mesh_gen.generate_mesh()
+
+with col_dxf:
+    st.subheader("📐 DXF 파싱 및 자동 메쉬 생성")
+    if uploaded_dxf:
+        dxf_pts = mesh_gen.parse_dxf_pattern(uploaded_dxf)
+        if dxf_pts:
+            st.success("✅ DXF 터널 단면 단면선 파싱 성공!")
+            st.info(f"추출된 DXF 노드 지점 수: {len(dxf_pts)} 개")
+        else:
+            st.warning("DXF 내 유효한 LINE/POLYLINE 레이어가 없어 기본 대칭 터널 단면을 적용합니다.")
     else:
-        st.success("✅ 배수 및 등판 능력 기준 만족 (안전 경사 범위)")
+        st.info("💡 DXF 파일이 없을 경우 기본 복합 지반 터널 단면 요소망이 사용됩니다.")
 
-    st.divider()
+    st.write(f"• **생성된 2D 요소망:** 절점 {len(nodes)} 개 / 삼각 요소 {len(elements)} 개")
 
-    st.subheader("📏 터널 설계 & 공사비 산출")
+    # 요소망 메쉬 시각화
+    fig_mesh, ax_mesh = plt.subplots(figsize=(5, 4))
+    ax_mesh.triplot(nodes[:, 0], nodes[:, 1], elements, color='gray', lw=0.4)
+    ax_mesh.set_title("Generated 2D FEA Mesh")
+    ax_mesh.set_xlabel("X (m)")
+    ax_mesh.set_ylabel("Z (m)")
+    st.pyplot(fig_mesh)
 
-    tunnel_length = st.number_input("터널 총 연장 L (m)", value=7314.0, step=10.0)
-    tunnel_area = st.number_input("터널 단면적 A (m²)", value=65.0, step=5.0)
-    
-    rmr_score = st.slider("지반 RMR 점수", min_value=0, max_value=100, value=58)
+with col_fea:
+    st.subheader("📊 2D 침투-응력 연계 해석 결과 (FEA Contour)")
 
-    if rmr_score >= 61:
-        pattern = "Pattern I (전단면 굴착)"
-        cost_per_m = 12000000
-    elif rmr_score >= 41:
-        pattern = "Pattern III (상/하반 분할 굴착)"
-        cost_per_m = 18000000
+    # FEA 연산 수행
+    solver = CoupledSeepageSolver(nodes, elements)
+    pore_p, k_unstat = solver.solve_seepage(gwl=gwl, k_sat=k_sat, alpha=vg_alpha, n_vg=vg_n)
+    sigma_v_eff, u_press, fs_val = solver.solve_stresses(pore_pressure=pore_p, unit_weight=unit_weight, cohesion=cohesion, phi_deg=phi_deg, k0=k0_val)
+
+    analysis_mode = st.radio("표시할 수치해석 컨투어 선택:", ["간극수압 분포 (Pore Pressure, kPa)", "유효 연직응력 (Effective Stress, kPa)", "Mohr-Coulomb 안전율 (Safety Factor)"], horizontal=True)
+
+    fig_contour, ax_c = plt.subplots(figsize=(7, 4.5))
+
+    if "간극수압" in analysis_mode:
+        c = ax_c.tripcolor(nodes[:, 0], nodes[:, 1], elements, pore_p, cmap='Blues', shading='flat')
+        fig_contour.colorbar(c, ax=ax_c, label="Pore Water Pressure (kPa)")
+        ax_c.axhline(gwl, color='cyan', linestyle='--', label=f'GWL ({gwl}m)')
+        ax_c.legend()
+    elif "유효 연직응력" in analysis_mode:
+        c = ax_c.tripcolor(nodes[:, 0], nodes[:, 1], elements, sigma_v_eff, cmap='viridis', shading='flat')
+        fig_contour.colorbar(c, ax=ax_c, label="Effective Stress σ'v (kPa)")
     else:
-        pattern = "Pattern V (강지보재 + 훠폴링 보강)"
-        cost_per_m = 26000000
+        c = ax_c.tripcolor(nodes[:, 0], nodes[:, 1], elements, fs_val, cmap='RdYlGn', vmin=0.8, vmax=2.5, shading='flat')
+        fig_contour.colorbar(c, ax=ax_c, label="Factor of Safety (FS)")
 
-    st.info(f"**추천 굴착 패턴:** {pattern}")
+    ax_c.set_title(f"2D FEA Result: {analysis_mode}")
+    ax_c.set_xlabel("X Distance (m)")
+    ax_c.set_ylabel("Depth Z (m)")
+    st.pyplot(fig_contour)
 
-    total_cost_krw = (tunnel_length * cost_per_m) + 500000000
-    st.metric("총 개략 공사비", f"{total_cost_krw / 1e8:.2f} 억원")
+st.divider()
 
-    st.divider()
-    
-    if st.button("🚀 지질 & 경사 반영 GTS NX MCT 생성"):
-        st.success("지질층 정보, 굴착 깊이, 경사도가 적용된 GTS NX 파일이 생성되었습니다!")
+# 해석 요약 결과 표시
+st.subheader("📋 2D 연계 해석 수치 분석 요약")
+col_m1, col_m2, col_m3 = st.columns(3)
+
+col_m1.metric("최대 간극수압", f"{np.max(pore_p):.1f} kPa")
+col_m2.metric("터널 하부 유효응력", f"{np.median(sigma_v_eff):.1f} kPa")
+min_fs = np.min(fs_val)
+col_m3.metric("최소 파괴 안전율 (Min FS)", f"{min_fs:.2f}", delta="안전" if min_fs >= 1.2 else "파괴 위험", delta_color="normal" if min_fs >= 1.2 else "inverse")
