@@ -1,6 +1,5 @@
 import math
 import io
-import json
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -15,13 +14,13 @@ except ModuleNotFoundError:
 # 1. 페이지 기본 설정
 # ======================================================================
 st.set_page_config(
-    page_title="위성 지도 연동 & 자유 이동 3D 터널 로드뷰",
-    page_icon="🎥",
+    page_title="GTS NX 스타일 ZXY 축 3D 뷰어 & 측점 DXF 연동기",
+    page_icon="🧊",
     layout="wide"
 )
 
-st.title("🎥 위성 지도 연동 & 자유 이동 3D 터널 로드뷰")
-st.markdown("위성 지도의 노선과 DXF 데이터가 3D 공간에 **100% 동기화**됩니다. **마우스 드래그(시선 회전) + WASD/화살표 키(이동)**로 터널 내부를 둘러보세요.")
+st.title("🧊 GTS NX 스타일 ZXY 축 3D 뷰어 & 측점 DXF 연동기")
+st.markdown("CAE 해석 프로그램처럼 **마우스 드래그로 ZXY 3차원 축을 자유롭게 회전·이동·확대**하며 지반 및 터널 유한요소망을 검토하세요.")
 
 st.divider()
 
@@ -67,7 +66,7 @@ active_radius = st.session_state.station_list[0]['radius']
 active_pipes = st.session_state.station_list[0]['pipes']
 
 # ======================================================================
-# 3. Leaflet 위성 지도 + Three.js 완전 연동 HTML/JS
+# 3. Leaflet 위성 지도 + Three.js OrbitControls (ZXY 축 자유 회전) HTML/JS
 # ======================================================================
 html_template = """
 <!DOCTYPE html>
@@ -77,8 +76,8 @@ html_template = """
     <style>
         body { margin: 0; padding: 0; overflow: hidden; background-color: #0b0b10; font-family: sans-serif; }
         #wrapper { display: flex; flex-direction: column; width: 100%; height: 630px; }
-        #map-container { width: 100%; height: 250px; position: relative; border-bottom: 2px solid #333; }
-        #canvas-container { width: 100%; height: 380px; position: relative; cursor: grab; }
+        #map-container { width: 100%; height: 230px; position: relative; border-bottom: 2px solid #333; }
+        #canvas-container { width: 100%; height: 400px; position: relative; cursor: grab; }
         #canvas-container:active { cursor: grabbing; }
         #map { width: 100%; height: 100%; }
         
@@ -118,6 +117,7 @@ html_template = """
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 </head>
 <body>
     <div id="wrapper">
@@ -139,19 +139,20 @@ html_template = """
 
         <div id="canvas-container">
             <div class="roadview-nav">
-                <b>🎥 3D 자유 로드뷰 (R=__RADIUS__m, 보강재=__PIPES__개)</b>
+                <b>🧊 GTS NX 스타일 ZXY 3D 뷰어 (R=__RADIUS__m, 보강재=__PIPES__개)</b>
             </div>
             <div class="guide-box">
-                🕹️ <b>3D 자유 이동 조종법:</b><br>
-                • <b>마우스 드래그:</b> 360도 자유 시선 회전<br>
-                • <b>WASD / 화살표 키:</b> 터널 내부 자유 이동
+                🕹️ <b>GTS NX 3D 조종법:</b><br>
+                • <b>좌클릭 드래그:</b> ZXY 3차원 축 자유 회전<br>
+                • <b>우클릭 드래그:</b> 평면 화면 이동(Pan)<br>
+                • <b>마우스 휠:</b> 3D 공간 확대 / 축소(Zoom)
             </div>
         </div>
     </div>
 
     <script>
         // ======================================================================
-        // A. Leaflet 위성 지도 & 직선/곡선 드로잉
+        // A. Leaflet 위성 지도
         // ======================================================================
         var map = L.map('map').setView([37.5, 128.3], 14);
         L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
@@ -235,39 +236,61 @@ html_template = """
         }
 
         // ======================================================================
-        // B. Three.js 자유 조종(마우스 드래그 + WASD) 3D 로드뷰
+        // B. GTS NX 스타일 Three.js OrbitControls (ZXY 3차원 축 조종)
         // ======================================================================
-        var scene, camera, renderer;
-        var tunnelMesh, ribGroup, pipeGroup;
-        var moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
-        var isDragging = false;
-        var previousMousePosition = { x: 0, y: 0 };
-        var yaw = 0, pitch = 0;
+        var scene, camera, renderer, controls;
+        var tunnelMesh, ribGroup, pipeGroup, axesHelper, groundMesh;
 
         window.addEventListener('load', function() {
             var container = document.getElementById('canvas-container');
 
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x0a0a0f);
-            scene.fog = new THREE.FogExp2(0x0a0a0f, 0.012);
+            scene.background = new THREE.Color(0x0b0b12);
+            scene.fog = new THREE.FogExp2(0x0b0b12, 0.008);
 
-            camera = new THREE.PerspectiveCamera(70, container.clientWidth / 380, 0.1, 1000);
-            camera.position.set(0, 0.5, 15); // 로드뷰 시점 높이
+            camera = new THREE.PerspectiveCamera(60, container.clientWidth / 400, 0.1, 1000);
+            camera.position.set(25, 20, 35); // 쿼터뷰 아이소메트릭 시점
 
             renderer = new THREE.WebGLRenderer({ antialias: true });
-            renderer.setSize(container.clientWidth, 380);
+            renderer.setSize(container.clientWidth, 400);
             renderer.setPixelRatio(window.devicePixelRatio);
             container.appendChild(renderer.domElement);
+
+            // OrbitControls 연결 (ZXY 자유 회전)
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.target.set(0, 0, -20);
+            controls.update();
+
+            // GTS NX 3차원 축 피봇 (Axes Helper: Red=X, Green=Y, Blue=Z)
+            axesHelper = new THREE.AxesHelper(15);
+            axesHelper.position.set(-20, -10, 10);
+            scene.add(axesHelper);
 
             // 조명
             var ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
             scene.add(ambientLight);
 
-            for (var lz = -80; lz <= 30; lz += 15) {
-                var light = new THREE.PointLight(0xffd54f, 1.8, 30);
-                light.position.set(0, 4.0, lz);
-                scene.add(light);
-            }
+            var dirLight1 = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight1.position.set(20, 40, 20);
+            scene.add(dirLight1);
+
+            var dirLight2 = new THREE.DirectionalLight(0xffd54f, 0.5);
+            dirLight2.position.set(-20, -20, -20);
+            scene.add(dirLight2);
+
+            // 3D 지반 유한요소망 (Solid Ground Mesh)
+            var groundGeo = new THREE.BoxGeometry(45, 30, 90);
+            var groundMat = new THREE.MeshStandardMaterial({
+                color: 0x3e3c38,
+                wireframe: true,
+                transparent: true,
+                opacity: 0.25
+            });
+            groundMesh = new THREE.Mesh(groundGeo, groundMat);
+            groundMesh.position.set(0, 0, -20);
+            scene.add(groundMesh);
 
             ribGroup = new THREE.Group();
             pipeGroup = new THREE.Group();
@@ -297,39 +320,44 @@ html_template = """
                 if (isCurved) {
                     var bend = Math.min(0.8, 150 / radius);
                     path = new THREE.CatmullRomCurve3([
-                        new THREE.Vector3(0, 0, 30),
-                        new THREE.Vector3(bend * 8, 0, 0),
-                        new THREE.Vector3(bend * 20, 0, -30),
-                        new THREE.Vector3(bend * 35, 0, -70)
+                        new THREE.Vector3(0, 0, 25),
+                        new THREE.Vector3(bend * 8, 0, -5),
+                        new THREE.Vector3(bend * 20, 0, -35),
+                        new THREE.Vector3(bend * 35, 0, -65)
                     ]);
                 } else {
                     path = new THREE.CatmullRomCurve3([
-                        new THREE.Vector3(0, 0, 30),
+                        new THREE.Vector3(0, 0, 25),
                         new THREE.Vector3(0, 0, -20),
-                        new THREE.Vector3(0, 0, -70)
+                        new THREE.Vector3(0, 0, -65)
                     ]);
                 }
 
                 var extrudeSettings = { steps: 80, bevelEnabled: false, extrudePath: path };
                 var tunnelGeo = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-                var tunnelMat = new THREE.MeshStandardMaterial({ color: 0x424242, side: THREE.BackSide, roughness: 0.6 });
+                var tunnelMat = new THREE.MeshStandardMaterial({
+                    color: 0x55555e,
+                    side: THREE.DoubleSide,
+                    roughness: 0.5,
+                    metalness: 0.2
+                });
                 tunnelMesh = new THREE.Mesh(tunnelGeo, tunnelMat);
                 scene.add(tunnelMesh);
 
                 // 강지보재
-                var ribMat = new THREE.LineBasicMaterial({ color: 0xffb74d, linewidth: 3 });
+                var ribMat = new THREE.LineBasicMaterial({ color: 0xffb74d, linewidth: 2 });
                 var edges = new THREE.EdgesGeometry(tunnelGeo);
                 var ribLine = new THREE.LineSegments(edges, ribMat);
                 ribGroup.add(ribLine);
 
                 // 보강재 파이프
-                var pipeMat = new THREE.MeshBasicMaterial({ color: 0xab47bc });
+                var pipeMat = new THREE.MeshStandardMaterial({ color: 0xab47bc, metalness: 0.8 });
                 var numPipes = __PIPES__;
                 var angleStep = (Math.PI - 0.4) / Math.max(1, (numPipes - 1));
 
                 for (var pIdx = 0; pIdx < numPipes; pIdx++) {
                     var pAngle = 0.2 + (pIdx * angleStep);
-                    var pipeGeo = new THREE.CylinderGeometry(0.12, 0.12, 50, 8);
+                    var pipeGeo = new THREE.CylinderGeometry(0.15, 0.15, 55, 8);
                     var pipeMesh = new THREE.Mesh(pipeGeo, pipeMat);
                     var px = (W_base + 0.3) * Math.cos(pAngle);
                     var py = (R + 0.3) * Math.sin(pAngle);
@@ -341,68 +369,9 @@ html_template = """
 
             window.rebuildTunnel3D(false, 300);
 
-            // 마우스 드래그 조종
-            container.addEventListener('mousedown', function(e) {
-                isDragging = true;
-                previousMousePosition = { x: e.clientX, y: e.clientY };
-            });
-
-            window.addEventListener('mousemove', function(e) {
-                if (!isDragging) return;
-                var deltaX = e.clientX - previousMousePosition.x;
-                var deltaY = e.clientY - previousMousePosition.y;
-
-                yaw -= deltaX * 0.003;
-                pitch -= deltaY * 0.003;
-                pitch = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, pitch));
-
-                var euler = new THREE.Euler(0, 0, 0, 'YXZ');
-                euler.x = pitch;
-                euler.y = yaw;
-                camera.quaternion.setFromEuler(euler);
-
-                previousMousePosition = { x: e.clientX, y: e.clientY };
-            });
-
-            window.addEventListener('mouseup', function() { isDragging = false; });
-
-            // WASD 이동 키
-            document.addEventListener('keydown', function(e) {
-                switch (e.code) {
-                    case 'KeyW': case 'ArrowUp': moveForward = true; break;
-                    case 'KeyS': case 'ArrowDown': moveBackward = true; break;
-                    case 'KeyA': case 'ArrowLeft': moveLeft = true; break;
-                    case 'KeyD': case 'ArrowRight': moveRight = true; break;
-                }
-            });
-
-            document.addEventListener('keyup', function(e) {
-                switch (e.code) {
-                    case 'KeyW': case 'ArrowUp': moveForward = false; break;
-                    case 'KeyS': case 'ArrowDown': moveBackward = false; break;
-                    case 'KeyA': case 'ArrowLeft': moveLeft = false; break;
-                    case 'KeyD': case 'ArrowRight': moveRight = false; break;
-                }
-            });
-
-            var clock = new THREE.Clock();
             function animate() {
                 requestAnimationFrame(animate);
-                var delta = clock.getDelta();
-                var moveSpeed = 12.0 * delta;
-
-                var dir = new THREE.Vector3();
-                camera.getWorldDirection(dir);
-                dir.y = 0;
-                dir.normalize();
-
-                var sideDir = new THREE.Vector3().crossVectors(camera.up, dir).normalize();
-
-                if (moveForward) camera.position.addScaledVector(dir, moveSpeed);
-                if (moveBackward) camera.position.addScaledVector(dir, -moveSpeed);
-                if (moveLeft) camera.position.addScaledVector(sideDir, moveSpeed);
-                if (moveRight) camera.position.addScaledVector(sideDir, -moveSpeed);
-
+                controls.update(); // OrbitControls 관성 프레임 업데이트
                 renderer.render(scene, camera);
             }
             animate();
@@ -412,7 +381,7 @@ html_template = """
 </html>
 """
 
-# 안전한replace 치환
+# 파이썬 변수 치환
 station_sync_html = html_template.replace("__RADIUS__", str(active_radius)).replace("__PIPES__", str(active_pipes))
 
 # ======================================================================
@@ -421,8 +390,8 @@ station_sync_html = html_template.replace("__RADIUS__", str(active_radius)).repl
 col_view, col_input = st.columns([1.6, 1.4])
 
 with col_view:
-    st.subheader("🌐 위성 지도 & 자유 이동(WASD) 3D 로드뷰")
-    components.html(station_sync_html, height=640)
+    st.subheader("🌐 위성 지도 & GTS NX 스타일 ZXY 3D FEA 뷰어")
+    components.html(station_sync_html, height=650)
 
 with col_input:
     st.subheader("📍 측점(Station) 타이핑 추가 & DXF 업로드")
@@ -489,3 +458,4 @@ with col_input:
     st.divider()
     if st.button("🚀 측점별 DXF 연동 GTS NX / PLAXIS MCT 도출"):
         st.success("타이핑 입력된 측점과 DXF 도면 데이터가 3D 수치해석 파일로 도출되었습니다!")
+        
