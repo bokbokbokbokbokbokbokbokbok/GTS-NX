@@ -6,19 +6,37 @@ from shapely.geometry import Polygon, LineString, MultiLineString
 import io
 
 # ==========================================
-# 1. DXF 파일에서 전체 레이어 목록 추출
+# 1. DXF 문서 로드 공통 함수 (Binary/ASCII & 인코딩 대응)
+# ==========================================
+def load_dxf_document(file_input):
+    """
+    UploadedFile 객체에서 바이너리/ASCII DXF 및 한글 인코딩을 안전하게 읽어오는 함수
+    """
+    file_input.seek(0)
+    bytes_data = file_input.read()
+    
+    # 1차 시도: ezdxf 내장 BytesIO 읽기 (Binary DXF 및 일반 DXF 대응)
+    try:
+        return ezdxf.read(io.BytesIO(bytes_data))
+    except Exception:
+        pass
+
+    # 2차 시도: 한글 CP949 / EUC-KR 디코딩 후 StringIO 읽기
+    for encoding in ['cp949', 'euc-kr', 'utf-8']:
+        try:
+            text_data = bytes_data.decode(encoding, errors='ignore')
+            return ezdxf.read(io.StringIO(text_data))
+        except Exception:
+            continue
+
+    raise ValueError("DXF 인코딩 형식을 해석할 수 없습니다. CAD에서 ASCII DXF로 재저장 후 시도해 보세요.")
+
+# ==========================================
+# 2. DXF 파일에서 전체 레이어 목록 추출
 # ==========================================
 def get_dxf_layers(file_input):
-    """
-    DXF 파일 내 존재하는 모든 레이어 이름 목록 반환
-    """
     try:
-        file_input.seek(0)
-        bytes_data = file_input.read()
-        # ezdxf.read()를 위한 StringIO 텍스트 스트림 변환
-        text_data = bytes_data.decode('utf-8', errors='ignore')
-        doc = ezdxf.read(io.StringIO(text_data))
-        
+        doc = load_dxf_document(file_input)
         layers = [layer.dxf.name for layer in doc.layers]
         return sorted(layers)
     except Exception as e:
@@ -26,17 +44,11 @@ def get_dxf_layers(file_input):
         return []
 
 # ==========================================
-# 2. DXF 레이어별 파싱 함수
+# 3. DXF 레이어별 파싱 함수
 # ==========================================
 def parse_dxf_by_layer(file_input, target_layer_name):
-    """
-    DXF 파일에서 지정한 레이어(target_layer_name)에 속한 POLYLINE/LWPOLYLINE 좌표 추출
-    """
     try:
-        file_input.seek(0)
-        bytes_data = file_input.read()
-        text_data = bytes_data.decode('utf-8', errors='ignore')
-        doc = ezdxf.read(io.StringIO(text_data))
+        doc = load_dxf_document(file_input)
     except Exception as e:
         st.error(f"DXF 파일 읽기 오류 ({file_input.name}): {e}")
         return []
@@ -47,7 +59,7 @@ def parse_dxf_by_layer(file_input, target_layer_name):
     for entity in msp:
         layer_name = entity.dxf.layer if hasattr(entity.dxf, 'layer') else ""
         
-        # 선택한 레이어와 일치하는 객체만 추출 (대소문자 구분 없음)
+        # 선택한 레이어와 일치하는 객체만 추출
         if target_layer_name.strip().lower() != layer_name.strip().lower():
             continue
 
@@ -70,7 +82,7 @@ def parse_dxf_by_layer(file_input, target_layer_name):
     return features
 
 # ==========================================
-# 3. 선로 반경 내 건물 필터링 및 엑셀 생성
+# 4. 선로 반경 내 건물 필터링 및 엑셀 생성
 # ==========================================
 def process_spatial_analysis(building_features, rail_features, buffer_distance):
     rail_lines = [LineString(r["pts"]) for r in rail_features if len(r["pts"]) >= 2]
@@ -124,7 +136,7 @@ def process_spatial_analysis(building_features, rail_features, buffer_distance):
     return filtered_buildings, df
 
 # ==========================================
-# 4. Streamlit UI 구성
+# 5. Streamlit UI 구성
 # ==========================================
 st.set_page_config(page_title="선로 반경 건물 추출기", layout="wide")
 
@@ -146,7 +158,7 @@ with col2:
     rail_file = st.file_uploader("선로 DXF 파일 선택", type=["dxf"], key="rail_file")
 
 if building_file is not None and rail_file is not None:
-    # DXF 내부 레이어 자동 감지
+    # DXF 내부 레이어 감지
     bld_layers = get_dxf_layers(building_file)
     rail_layers = get_dxf_layers(rail_file)
 
@@ -155,12 +167,10 @@ if building_file is not None and rail_file is not None:
     
     layer_col1, layer_col2 = st.columns(2)
     with layer_col1:
-        # '건물'이 포함된 레이어를 기본값으로 자동 선택
         default_bld_idx = next((i for i, l in enumerate(bld_layers) if "건물" in l or "BUILDING" in l.upper()), 0)
         selected_bld_layer = st.selectbox("건물 DXF 레이어 선택", bld_layers, index=default_bld_idx if bld_layers else 0)
 
     with layer_col2:
-        # '선로'가 포함된 레이어를 기본값으로 자동 선택
         default_rail_idx = next((i for i, l in enumerate(rail_layers) if "선로" in l or "RAIL" in l.upper() or "LINE" in l.upper()), 0)
         selected_rail_layer = st.selectbox("선로 DXF 레이어 선택", rail_layers, index=default_rail_idx if rail_layers else 0)
 
