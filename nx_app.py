@@ -4,27 +4,23 @@ from ezdxf import recover
 import pandas as pd
 import plotly.graph_objects as go
 from shapely.geometry import Polygon, LineString, MultiLineString
+from pyproj import Transformer
 import io
 import tempfile
 import os
 
 # ==========================================
-# 1. DXF 로드 공통 함수 (Binary/ASCII/인코딩 무조건 대응)
+# 1. DXF 복구 및 안전 로드 함수
 # ==========================================
 def load_dxf_document(file_input):
-    """
-    UploadedFile 객체를 임시 파일 및 다양한 파서/인코딩 옵션으로 안전하게 로드하는 함수
-    """
     file_input.seek(0)
     bytes_data = file_input.read()
 
-    # 1. 임시 파일 작성을 통한 recover 모드 파싱 (가장 강력함: Binary & Broken ASCII 모두 복구)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp_file:
         tmp_file.write(bytes_data)
         tmp_path = tmp_file.name
 
     try:
-        # ezdxf recover 함수로 구조적 오류 및 인코딩 오류 자동 복구
         doc, auditor = recover.readfile(tmp_path)
         os.remove(tmp_path)
         return doc
@@ -32,13 +28,11 @@ def load_dxf_document(file_input):
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
 
-    # 2. BytesIO 처리 (표준 Binary/ASCII DXF)
     try:
         return ezdxf.read(io.BytesIO(bytes_data))
     except Exception:
         pass
 
-    # 3. 한글 CP949 / EUC-KR / UTF-8 강제 디코딩 후 StringIO 처리
     for encoding in ['cp949', 'euc-kr', 'ansi', 'utf-8']:
         try:
             text_data = bytes_data.decode(encoding, errors='ignore')
@@ -46,7 +40,7 @@ def load_dxf_document(file_input):
         except Exception:
             continue
 
-    raise ValueError("DXF 파일 해석에 실패했습니다. 파일이 손상되었거나 지원되지 않는 형식입니다.")
+    raise ValueError("DXF 파일 파싱 실패: 파일이 손상되었거나 인코딩이 지원되지 않습니다.")
 
 # ==========================================
 # 2. DXF 레이어 목록 추출
@@ -61,7 +55,7 @@ def get_dxf_layers(file_input):
         return []
 
 # ==========================================
-# 3. DXF 레이어별 객체 파싱 함수
+# 3. DXF 레이어별 객체 파싱
 # ==========================================
 def parse_dxf_by_layer(file_input, target_layer_name):
     try:
@@ -75,8 +69,6 @@ def parse_dxf_by_layer(file_input, target_layer_name):
 
     for entity in msp:
         layer_name = entity.dxf.layer if hasattr(entity.dxf, 'layer') else ""
-        
-        # 선택한 레이어와 일치하는 객체만 추출 (대소문자 무시)
         if target_layer_name.strip().lower() != layer_name.strip().lower():
             continue
 
@@ -101,20 +93,19 @@ def parse_dxf_by_layer(file_input, target_layer_name):
     return features
 
 # ==========================================
-# 4. 선로 반경 내 건물 필터링 및 공간 분석
+# 4. 공간 분석 및 버퍼 판정 (숫자 연번 순차 부여)
 # ==========================================
 def process_spatial_analysis(building_features, rail_features, buffer_distance):
     rail_lines = [LineString(r["pts"]) for r in rail_features if len(r["pts"]) >= 2]
-    
     if not rail_lines:
-        return [], pd.DataFrame()
+        return [], pd.DataFrame(), None
 
     multi_rail = MultiLineString(rail_lines)
     rail_buffer_zone = multi_rail.buffer(buffer_distance)
 
     filtered_buildings = []
     building_records = []
-    bld_idx = 1
+    bld_idx = 1  # 1부터 시작하는 숫자 연번
 
     for bld in building_features:
         pts = bld["pts"]
@@ -129,7 +120,7 @@ def process_spatial_analysis(building_features, rail_features, buffer_distance):
         if rail_buffer_zone.intersects(bld_poly):
             centroid_x = bld_poly.centroid.x
             centroid_y = bld_poly.centroid.y
-            bld_code = f"BLD-{bld_idx:04d}"
+            bld_code = str(bld_idx)  # 숫자 연번 (1, 2, 3...)
 
             filtered_buildings.append({
                 "code": bld_code,
@@ -139,7 +130,7 @@ def process_spatial_analysis(building_features, rail_features, buffer_distance):
             })
 
             building_records.append({
-                "연번": bld_code,
+                "연번": bld_idx,
                 "건물명": f"건물_{bld_idx}",
                 "레이어명": bld["layer"],
                 "X좌표(중심)": round(centroid_x, 3),
@@ -152,119 +143,145 @@ def process_spatial_analysis(building_features, rail_features, buffer_distance):
             bld_idx += 1
 
     df = pd.DataFrame(building_records)
-    return filtered_buildings, df
+    return filtered_buildings, df, rail_buffer_zone
 
 # ==========================================
-# 5. Streamlit UI 구성
+# 5. UI 및 Streamlit 메인 구성
 # ==========================================
-st.set_page_config(page_title="선로 반경 건물 추출기", layout="wide")
+st.set_page_config(page_title="선로-건물-지도 3D 오버랩 검토기", layout="wide")
 
-st.title("🛤️ 선로 반경 내 건물 영향권 파싱 및 엑셀 추출기")
-st.write("선로 반경 안에 위치한 건물만 자동으로 판별하여 연번을 부여하고 씨리얼 양식 엑셀을 생성합니다.")
+st.title("🗺️ 3중 오버랩 기반 선로 영향권 건물 분석 시스템")
+st.write("선로 CAD, 건물 CAD, 씨리얼/공공 지도를 좌표 기반으로 정밀 오버랩하여 마우스로 자유롭게 이동 및 확대한 후 연번(1, 2, 3...)을 비교합니다.")
 
-# 사이드바 설정
-st.sidebar.header("⚙️ 분석 설정")
+st.sidebar.header("⚙️ 좌표계 및 분석 설정")
+epsg_code = st.sidebar.selectbox(
+    "CAD 도면 좌표계 선택 (KOREA EPSG)",
+    ["EPSG:5186 (중부원점 GR380)", "EPSG:5181 (중부원점 Bessel)", "EPSG:5179 (UTM-K 신좌표계)"],
+    index=0
+)
+epsg_num = epsg_code.split()[0]
+
 buffer_dist = st.sidebar.number_input("선로 영향 반경 (m)", min_value=1.0, max_value=500.0, value=50.0, step=5.0)
 
 col1, col2 = st.columns(2)
-
 with col1:
-    st.subheader("1️⃣ 건물 DXF 업로드")
-    building_file = st.file_uploader("건물 DXF 파일 선택", type=["dxf"], key="bld_file")
+    st.subheader("1️⃣ 건물 CAD (DXF)")
+    building_file = st.file_uploader("건물 DXF 업로드", type=["dxf"], key="bld_file")
 
 with col2:
-    st.subheader("2️⃣ 선로 DXF 업로드")
-    rail_file = st.file_uploader("선로 DXF 파일 선택", type=["dxf"], key="rail_file")
+    st.subheader("2️⃣ 선로 CAD (DXF)")
+    rail_file = st.file_uploader("선로 DXF 업로드", type=["dxf"], key="rail_file")
 
-if building_file is not None and rail_file is not None:
-    # DXF 내부 레이어 자동 감지
+if building_file and rail_file:
     bld_layers = get_dxf_layers(building_file)
     rail_layers = get_dxf_layers(rail_file)
 
     st.markdown("---")
-    st.subheader("🎯 추출할 레이어 지정")
+    st.subheader("🎯 추출 레이어 설정")
+    lcol1, lcol2 = st.columns(2)
     
-    layer_col1, layer_col2 = st.columns(2)
-    with layer_col1:
-        default_bld_idx = next((i for i, l in enumerate(bld_layers) if "건물" in l or "BUILDING" in l.upper()), 0)
-        selected_bld_layer = st.selectbox("건물 DXF 레이어 선택", bld_layers, index=default_bld_idx if bld_layers else 0)
+    with lcol1:
+        selected_bld_layer = st.selectbox("건물 레이어", bld_layers)
+    with lcol2:
+        selected_rail_layer = st.selectbox("선로 레이어", rail_layers)
 
-    with layer_col2:
-        default_rail_idx = next((i for i, l in enumerate(rail_layers) if "선로" in l or "RAIL" in l.upper() or "LINE" in l.upper()), 0)
-        selected_rail_layer = st.selectbox("선로 DXF 레이어 선택", rail_layers, index=default_rail_idx if rail_layers else 0)
-
-    if st.button("🚀 영향권 건물 파싱 및 엑셀 생성"):
-        with st.spinner("DXF 레이어 파싱 및 공간 분석 수행 중..."):
+    if st.button("🚀 3중 오버랩 지도 시각화 및 건물 연번 추출"):
+        with st.spinner("CAD 좌표 투영 및 지도 오버랩 분석 중..."):
             bld_features = parse_dxf_by_layer(building_file, selected_bld_layer)
             rail_features = parse_dxf_by_layer(rail_file, selected_rail_layer)
 
-        if not bld_features:
-            st.error(f"건물 DXF 파일의 '{selected_bld_layer}' 레이어에서 POLYLINE/LINE 객체를 찾지 못했습니다.")
-        elif not rail_features:
-            st.error(f"선로 DXF 파일의 '{selected_rail_layer}' 레이어에서 POLYLINE/LINE 객체를 찾지 못했습니다.")
-        else:
-            filtered_blds, df_buildings = process_spatial_analysis(bld_features, rail_features, buffer_dist)
+            filtered_blds, df_buildings, buffer_zone = process_spatial_analysis(bld_features, rail_features, buffer_dist)
 
-            st.success(f"분석 완료! 선로 반경 {buffer_dist}m 이내 건물 {len(filtered_blds)}개가 추출되었습니다.")
+            # 좌표 변환기 (CAD 투영좌표계 -> 위도/경도 WGS84)
+            transformer = Transformer.from_crs(epsg_num, "EPSG:4326", always_xy=True)
 
-            # 시각화 (Plotly)
             fig = go.Figure()
 
-            # 1. 선로 (빨간색)
+            # 1. 선로 CAD 레이어 오버랩 (빨간색)
             for rail in rail_features:
-                rx = [p[0] for p in rail["pts"]]
-                ry = [p[1] for p in rail["pts"]]
-                fig.add_trace(go.Scatter(
-                    x=rx, y=ry, mode='lines',
-                    line=dict(color='red', width=3),
-                    name='선로'
+                rx_list, ry_list = [], []
+                for p in rail["pts"]:
+                    lon, lat = transformer.transform(p[0], p[1])
+                    rx_list.append(lon)
+                    ry_list.append(lat)
+
+                fig.add_trace(go.Scattermapbox(
+                    lon=rx_list, lat=ry_list,
+                    mode='lines',
+                    line=dict(width=4, color='red'),
+                    name='선로 CAD'
                 ))
 
-            # 2. 반경 내 건물 (파란색 + 연번 라벨)
+            # 2. 반경 내 영향권 건물 CAD 레이어 오버랩 (파란색 + 숫자 연번 표시)
+            center_lats, center_lons = [], []
             for bld in filtered_blds:
-                pts = bld["pts"]
-                bx = [p[0] for p in pts] + [pts[0][0]]
-                by = [p[1] for p in pts] + [pts[0][1]]
+                bx_list, by_list = [], []
+                pts = bld["pts"] + [bld["pts"][0]] # 닫힌 다각형
+                
+                for p in pts:
+                    lon, lat = transformer.transform(p[0], p[1])
+                    bx_list.append(lon)
+                    by_list.append(lat)
 
-                fig.add_trace(go.Scatter(
-                    x=bx, y=by, mode='lines',
-                    line=dict(color='blue', width=1.5),
-                    fill="toself", fillcolor="rgba(0, 100, 255, 0.2)",
-                    showlegend=False, hoverinfo='text',
-                    text=f"연번: {bld['code']}"
+                fig.add_trace(go.Scattermapbox(
+                    lon=bx_list, lat=by_list,
+                    mode='lines',
+                    fill='toself',
+                    fillcolor='rgba(0, 120, 255, 0.35)',
+                    line=dict(width=2, color='blue'),
+                    hoverinfo='text',
+                    text=f"건물 연번: {bld['code']}",
+                    showlegend=False
                 ))
 
-                fig.add_trace(go.Scatter(
-                    x=[bld["centroid"][0]], y=[bld["centroid"][1]],
-                    mode='text', text=[bld["code"]],
-                    textposition="middle center",
-                    textfont=dict(size=10, color="black"),
-                    showlegend=False, hoverinfo='none'
+                # 건물 중심 좌표에 숫자 연번 마커 추가
+                c_lon, c_lat = transformer.transform(bld["centroid"][0], bld["centroid"][1])
+                center_lons.append(c_lon)
+                center_lats.append(c_lat)
+
+                fig.add_trace(go.Scattermapbox(
+                    lon=[c_lon], lat=[c_lat],
+                    mode='text',
+                    text=[bld["code"]],
+                    textfont=dict(size=14, color='black'),
+                    hoverinfo='none',
+                    showlegend=False
                 ))
 
+            # 지도 중심점 계산
+            if center_lats:
+                avg_lat = sum(center_lats) / len(center_lats)
+                avg_lon = sum(center_lons) / len(center_lons)
+            else:
+                avg_lat, avg_lon = 37.5665, 126.9780
+
+            # 3. 씨리얼 / OpenStreetMap 오버랩 레이아웃
             fig.update_layout(
-                title=f"CAD 오버랩 도면 (선로 반경 {buffer_dist}m 이내 건물 추출)",
-                xaxis_title="X 좌표", yaxis_title="Y 좌표",
-                yaxis=dict(scaleanchor="x", scaleratio=1),
-                width=1000, height=700
+                mapbox=dict(
+                    style="open-street-map",
+                    center=dict(lat=avg_lat, lon=avg_lon),
+                    zoom=15
+                ),
+                margin=dict(l=0, r=0, t=30, b=0),
+                height=750,
+                title=f"📌 선로 반경 {buffer_dist}m 오버랩 지도 (마우스 드래그/휠 확대 이동 가능)"
             )
 
             st.plotly_chart(fig, use_container_width=True)
 
-            # 데이터 프레임 표 및 엑셀 다운로드
-            st.subheader("📋 씨리얼(SEE:REAL) 건물 정보 데이터")
+            # 표 및 엑셀 출력
+            st.subheader("📋 선로 영향권 건물 연번 비교 데이터 (씨리얼 양식)")
             st.dataframe(df_buildings, use_container_width=True)
 
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_buildings.to_excel(writer, index=False, sheet_name='선로반경_건물목록')
-            excel_data = output.getvalue()
-
+                df_buildings.to_excel(writer, index=False, sheet_name='영향권건물_목록')
+            
             st.download_button(
-                label="📥 추출된 건물정보 엑셀 파일 다운로드",
-                data=excel_data,
-                file_name=f"Rail_Buffer_{int(buffer_dist)}m_Buildings.xlsx",
+                label="📥 연번 매칭 건물목록 엑셀 다운로드",
+                data=output.getvalue(),
+                file_name=f"Rail_Overlap_Buildings_{int(buffer_dist)}m.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 else:
-    st.info("💡 건물 DXF 파일과 선로 DXF 파일을 모두 업로드해 주세요.")
+    st.info("💡 선로 및 건물 CAD(DXF) 파일 2개를 모두 업로드하면 3중 오버랩 지도가 표시됩니다.")
