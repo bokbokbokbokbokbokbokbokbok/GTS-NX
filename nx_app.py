@@ -6,7 +6,7 @@ from shapely.geometry import Polygon, LineString, MultiLineString
 import io
 
 # ==========================================
-# 1. DXF 문서 로드 공통 함수 (Binary/ASCII & 인코딩 대응)
+# 1. DXF 로드 공통 함수 (Binary/ASCII & 인코딩 대응)
 # ==========================================
 def load_dxf_document(file_input):
     """
@@ -15,13 +15,13 @@ def load_dxf_document(file_input):
     file_input.seek(0)
     bytes_data = file_input.read()
     
-    # 1차 시도: ezdxf 내장 BytesIO 읽기 (Binary DXF 및 일반 DXF 대응)
+    # 1차 시도: ezdxf 내장 BytesIO 처리 (Binary DXF 및 일반 DXF)
     try:
         return ezdxf.read(io.BytesIO(bytes_data))
     except Exception:
         pass
 
-    # 2차 시도: 한글 CP949 / EUC-KR 디코딩 후 StringIO 읽기
+    # 2차 시도: 한글 CP949 / EUC-KR / UTF-8 디코딩 후 StringIO 처리
     for encoding in ['cp949', 'euc-kr', 'utf-8']:
         try:
             text_data = bytes_data.decode(encoding, errors='ignore')
@@ -32,7 +32,7 @@ def load_dxf_document(file_input):
     raise ValueError("DXF 인코딩 형식을 해석할 수 없습니다. CAD에서 ASCII DXF로 재저장 후 시도해 보세요.")
 
 # ==========================================
-# 2. DXF 파일에서 전체 레이어 목록 추출
+# 2. DXF 레이어 목록 추출
 # ==========================================
 def get_dxf_layers(file_input):
     try:
@@ -44,7 +44,7 @@ def get_dxf_layers(file_input):
         return []
 
 # ==========================================
-# 3. DXF 레이어별 파싱 함수
+# 3. DXF 레이어별 객체 파싱 함수
 # ==========================================
 def parse_dxf_by_layer(file_input, target_layer_name):
     try:
@@ -59,13 +59,14 @@ def parse_dxf_by_layer(file_input, target_layer_name):
     for entity in msp:
         layer_name = entity.dxf.layer if hasattr(entity.dxf, 'layer') else ""
         
-        # 선택한 레이어와 일치하는 객체만 추출
+        # 선택한 레이어와 일치하는 객체만 추출 (대소문자 무시)
         if target_layer_name.strip().lower() != layer_name.strip().lower():
             continue
 
         dxf_type = entity.dxftype()
         pts = []
 
+        # 올바른 리스트 컴프리핸션 문법 적용
         if dxf_type == 'POLYLINE':
             pts = [(v.dxf.location.x, v.dxf.location.y) for v in entity.vertices]
         elif dxf_type == 'LWPOLYLINE':
@@ -82,7 +83,7 @@ def parse_dxf_by_layer(file_input, target_layer_name):
     return features
 
 # ==========================================
-# 4. 선로 반경 내 건물 필터링 및 엑셀 생성
+# 4. 선로 반경 내 건물 필터링 및 공간 분석
 # ==========================================
 def process_spatial_analysis(building_features, rail_features, buffer_distance):
     rail_lines = [LineString(r["pts"]) for r in rail_features if len(r["pts"]) >= 2]
@@ -107,6 +108,7 @@ def process_spatial_analysis(building_features, rail_features, buffer_distance):
         except Exception:
             continue
 
+        # 공간 연산: 선로 버퍼 구역과 건물의 교차/포함 여부 판정
         if rail_buffer_zone.intersects(bld_poly):
             centroid_x = bld_poly.centroid.x
             centroid_y = bld_poly.centroid.y
@@ -158,7 +160,7 @@ with col2:
     rail_file = st.file_uploader("선로 DXF 파일 선택", type=["dxf"], key="rail_file")
 
 if building_file is not None and rail_file is not None:
-    # DXF 내부 레이어 감지
+    # DXF 내부 레이어 자동 감지
     bld_layers = get_dxf_layers(building_file)
     rail_layers = get_dxf_layers(rail_file)
 
@@ -188,7 +190,7 @@ if building_file is not None and rail_file is not None:
 
             st.success(f"분석 완료! 선로 반경 {buffer_dist}m 이내 건물 {len(filtered_blds)}개가 추출되었습니다.")
 
-            # --- Plotly 시각화 ---
+            # 시각화 (Plotly)
             fig = go.Figure()
 
             # 1. 선로 (빨간색)
@@ -201,7 +203,7 @@ if building_file is not None and rail_file is not None:
                     name='선로'
                 ))
 
-            # 2. 건물 (파란색 + 연번 라벨)
+            # 2. 반경 내 건물 (파란색 + 연번 라벨)
             for bld in filtered_blds:
                 pts = bld["pts"]
                 bx = [p[0] for p in pts] + [pts[0][0]]
@@ -232,7 +234,7 @@ if building_file is not None and rail_file is not None:
 
             st.plotly_chart(fig, use_container_width=True)
 
-            # --- 엑셀 표 & 다운로드 ---
+            # 데이터 프레임 표 및 엑셀 다운로드
             st.subheader("📋 씨리얼(SEE:REAL) 건물 정보 데이터")
             st.dataframe(df_buildings, use_container_width=True)
 
