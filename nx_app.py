@@ -1,73 +1,96 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-from io import BytesIO
+import folium
+from streamlit_folium import st_folium
 
-# 페이지 기본 설정
-st.set_page_config(page_title="자동 연도변조사 시스템", layout="wide", page_icon="🏗️")
+st.set_page_config(layout="wide")
+st.title("🏛️ 건물대장 연번 표 & CAD 수치지도 오버랩")
 
-st.title("🏗️ 철도/도로 연도변조사 자동화 시스템")
-st.write("선로 도면과 Base 도면을 입력하고 반경을 설정하면, 영향권 내 건물 리스트를 추출하여 건축물대장 기반 엑셀 양식으로 출력합니다.")
+# 1. 건물대장 및 CAD 구역 연치 데이터 (가상 데이터 예시)
+# 실제 환경에서는 ezdxf / geopandas를 통해 DXF 파일을 읽어 좌표(EPSG:5186 등)를 WGS84(EPSG:4326)로 변환하여 사용합니다.
+building_data = [
+    {
+        "연번": 1, "건물명": "1호관 (본관)", "주용도": "업무시설", "층수": "지상 5층",
+        "lat": 37.5665, "lng": 126.9780,
+        "polygon": [[37.5663, 126.9777], [37.5667, 126.9777], [37.5667, 126.9783], [37.5663, 126.9783]]
+    },
+    {
+        "연번": 2, "건물명": "2호관 (연구동)", "주용도": "교육연구시설", "층수": "지상 3층",
+        "lat": 37.5672, "lng": 126.9791,
+        "polygon": [[37.5670, 126.9788], [37.5674, 126.9788], [37.5674, 126.9794], [37.5670, 126.9794]]
+    },
+    {
+        "연번": 3, "건물명": "3호관 (복지관)", "주용도": "근린생활시설", "층수": "지상 2층",
+        "lat": 37.5658, "lng": 126.9772,
+        "polygon": [[37.5656, 126.9769], [37.5660, 126.9769], [37.5660, 126.9775], [37.5656, 126.9775]]
+    }
+]
 
-# 사이드바: 파일 업로드 및 설정
-with st.sidebar:
-    st.header("1. 도면 파일 업로드")
-    route_dxf = st.file_uploader("선로 도면 업로드 (DXF)", type=['dxf'], key='route')
-    base_dxf = st.file_uploader("Base 도면 업로드 (DXF - 건물, 수치지도)", type=['dxf'], key='base')
+df = pd.DataFrame(building_data)
+
+# 레이아웃 구성 (좌측: 표, 우측: 수치지도 오버랩)
+col1, col2 = st.columns([1, 1.2])
+
+with col1:
+    st.subheader("📋 건물대장 연번목록")
     
-    st.markdown("---")
-    st.header("2. 조사 설정")
-    buffer_radius = st.number_input("조사 반경 설정 (m)", min_value=1, max_value=500, value=30, step=5)
-    run_button = st.button("영향권 분석 및 대장 추출 실행", use_container_width=True)
+    # 세션 상태를 이용해 표에서 선택한 연번 강조
+    selected_no = st.selectbox("🎯 지도에서 강조할 연번 선택", df["연번"].tolist())
+    
+    # 데이터프레임 출력
+    st.dataframe(
+        df[["연번", "건물명", "주용도", "층수"]],
+        use_container_width=True,
+        hide_index=True
+    )
 
-# 메인 화면 영역
-if run_button:
-    if route_dxf is None or base_dxf is None:
-        st.warning("선로 도면과 Base 도면(DXF 파일)을 모두 업로드해주세요.")
-    else:
-        with st.spinner(f"선로 반경 {buffer_radius}m 내 건물 추출 및 건축물대장 연동 중... (가상 데모)"):
-            import time
-            time.sleep(2) 
-            
-            st.success("영향권 분석 및 대장 정보 추출 완료!")
-            st.subheader(f"📍 선로 반경 {buffer_radius}m 이내 추출 건물 목록 (임시 예시 데이터)")
-            
-            # 제공해주신 '연도변조사 현황' 엑셀 양식을 반영한 가상 데이터 세팅
-            output_data = {
-                "연번": [1, 2, 3, 4],
-                "명칭": ["주택", "창고", "상가", "비닐하우스"],
-                "도로명": ["고양대로 123", "고양대로 125", "고양대로 130", ""],
-                "지번": ["도내동 11-1", "도내동 11-2", "도내동 12-5", "도내동 144-1"],
-                "구조형식": ["철근콘크리트구조", "경량철골구조", "일반철골구조", ""],
-                "높이(m)\n(건축면적, m2)": ["12.5 (135.2)", "5.5 (250.0)", "15.0 (300.5)", ""],
-                "층수\n(지하/지상)": ["1/3", "0/1", "1/4", ""],
-                "용도": ["단독주택", "창고시설", "제1종근린생활시설", ""],
-                "준공년도": ["20150512", "20081020", "20200115", ""],
-                "기한": ["10~20년", "20~30년", "10년 미만", ""],
-                "등급": ["B", "C", "A", ""],
-                "기초형식\n(내진설계)": ["지내력기초(내진적용)", "내진 비적용", "내진적용", ""],
-                "건축물대장\n유무": ["O", "O", "O", "X"],
-                "도면\n보유현황": ["X", "X", "O", ""],
-                "비고(지역 및 구역 등)": ["제1종일반주거지역", "자연녹지지역", "지구단위계획구역", "고양창릉공공주택지구공사현장"]
-            }
-            
-            df_result = pd.DataFrame(output_data)
-            st.dataframe(df_result, use_container_width=True)
-            
-            # 엑셀 다운로드 파일 생성 로직
-            def convert_df_to_excel(df):
-                output = BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    df.to_excel(writer, index=False, sheet_name='연도변조사 현황')
-                processed_data = output.getvalue()
-                return processed_data
+with col2:
+    st.subheader("🗺️ CAD 수치지도 & 연번 위치 오버랩")
+    
+    # 지도 중심 설정
+    center_lat = df["lat"].mean()
+    center_lng = df["lng"].mean()
+    
+    # 기본 지도 생성 (VWorld/위성지도 타일 스타일 적용 가능)
+    m = folium.Map(location=[center_lat, center_lng], zoom_start=17)
+    
+    # CAD 수치지도 선형 데이터(Polygon) 및 연번 오버랩 출력
+    for _, row in df.iterrows():
+        is_selected = (row["연번"] == selected_no)
+        
+        # 1) CAD 수치지도 폴리곤 레이어 (경계선)
+        folium.Polygon(
+            locations=row["polygon"],
+            color="#FF3333" if is_selected else "#2B579A",  # 선택된 건물은 빨간색 강조
+            weight=3 if is_selected else 2,
+            fill=True,
+            fill_color="#FF8888" if is_selected else "#3388ff",
+            fill_opacity=0.4 if is_selected else 0.2,
+            tooltip=f"CAD 레이어 [연번 {row['연번']}]"
+        ).add_to(m)
+        
+        # 2) 연번 라벨 마커 (숫자 표기)
+        icon_html = f"""
+            <div style="
+                font-size: 12px;
+                font-weight: bold;
+                color: white;
+                background-color: {'#FF3333' if is_selected else '#1E3A8A'};
+                border-radius: 4px;
+                padding: 2px 6px;
+                border: 1px solid white;
+                box-shadow: 1px 1px 4px rgba(0,0,0,0.4);
+                white-space: nowrap;
+            ">
+                No.{row['연번']}
+            </div>
+        """
+        
+        folium.Marker(
+            location=[row["lat"], row["lng"]],
+            popup=f"<b>[연번 {row['연번']}] {row['건물명']}</b><br>{row['주용도']}",
+            icon=folium.DivIcon(html=icon_html, icon_size=(40, 20))
+        ).add_to(m)
 
-            excel_data = convert_df_to_excel(df_result)
-            
-            st.download_button(
-                label="📥 엑셀 파일로 다운로드 (연도변조사 현황 양식)",
-                data=excel_data,
-                file_name=f"연도변조사결과_반경{buffer_radius}m.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary"
-            )
+    # 마우스 조작 가능한 Folium 지도 출력
+    st_folium(m, width="100%", height=550)
