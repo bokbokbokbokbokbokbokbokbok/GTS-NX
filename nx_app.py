@@ -2,7 +2,8 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import ezdxf
-from ezdxf.recover import readfile_or_stream
+import tempfile
+import os
 import io
 from shapely.geometry import LineString, Polygon
 
@@ -17,27 +18,36 @@ uploaded_dxf_building = st.sidebar.file_uploader("2. 건물 DXF 파일 업로드
 buffer_radius = st.sidebar.slider("선로 영향 반경 (m / 단위거리)", min_value=1.0, max_value=50.0, value=10.0, step=1.0)
 
 # -------------------------------------------------------------------
-# DXF 읽기 도우미 함수 (복구 로더 및 예외 처리 적용)
+# DXF 읽기 도우미 함수 (임시 파일 저장 및 다중 인코딩 fallback)
 # -------------------------------------------------------------------
 def load_dxf_doc(uploaded_file):
-    """손상되거나 인코딩이 비표준인 DXF도 ezdxf.recover 모듈로 복구하여 로드"""
+    """
+    Streamlit UploadedFile 객체를 임시 파일로 저장 후 ezdxf로 로드.
+    바이너리/ASCII 및 다양한 인코딩(EUC-KR, UTF-8 등)을 완벽 지원합니다.
+    """
     raw_bytes = uploaded_file.getvalue()
 
-    # 1. ezdxf 공식 복구 로더 사용 (가장 우수한 데이터 복원력)
+    # 1. 임시 파일 생성 후 ezdxf.readfile 로드 (가장 안정적)
     try:
-        doc, auditor = readfile_or_stream(io.BytesIO(raw_bytes))
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp_file:
+            tmp_file.write(raw_bytes)
+            tmp_path = tmp_file.name
+        
+        doc = ezdxf.readfile(tmp_path)
+        os.remove(tmp_path)
         return doc
     except Exception:
-        pass
+        if 'tmp_path' in locals() and os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
-    # 2. CP949 / EUC-KR (한국어 캐드 레이어 인코딩 강제 지정)
+    # 2. EUC-KR / CP949 (한국어 CAD 도면 인코딩 대응)
     try:
         text_euckr = raw_bytes.decode('euc-kr', errors='ignore')
         return ezdxf.read(io.StringIO(text_euckr))
     except Exception:
         pass
 
-    # 3. UTF-8
+    # 3. UTF-8 fallback
     try:
         text_utf8 = raw_bytes.decode('utf-8', errors='ignore')
         return ezdxf.read(io.StringIO(text_utf8))
@@ -54,7 +64,7 @@ def load_dxf_doc(uploaded_file):
 def process_route_dxf(file, buffer_dist):
     doc = load_dxf_doc(file)
     if doc is None:
-        st.error("❌ 선로 DXF 파일을 읽을 수 없습니다. 파일 형식이나 인코딩을 확인해 주세요.")
+        st.error("❌ 선로 DXF 파일을 읽을 수 없습니다. CAD에서 ASCII DXF 형식으로 다시 저장해 주세요.")
         return []
         
     msp = doc.modelspace()
@@ -96,7 +106,7 @@ def process_route_dxf(file, buffer_dist):
 def process_building_dxf(file):
     doc = load_dxf_doc(file)
     if doc is None:
-        st.error("❌ 건물 DXF 파일을 읽을 수 없습니다. 파일 형식이나 인코딩을 확인해 주세요.")
+        st.error("❌ 건물 DXF 파일을 읽을 수 없습니다. CAD에서 ASCII DXF 형식으로 다시 저장해 주세요.")
         return []
 
     msp = doc.modelspace()
