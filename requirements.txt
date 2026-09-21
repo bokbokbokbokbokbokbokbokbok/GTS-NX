@@ -1,2 +1,5 @@
 streamlit
-ezodxf
+ezdxf
+pandas
+plotly
+shapely
