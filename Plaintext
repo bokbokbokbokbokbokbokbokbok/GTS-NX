@@ -1,3 +1,8 @@
-openpyxl
-pandas
 streamlit
+pandas
+openpyxl
+folium
+streamlit-folium
+ezdxf
+geopandas
+pyproj
