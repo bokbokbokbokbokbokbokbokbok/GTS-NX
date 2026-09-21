@@ -2,12 +2,13 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import ezdxf
+import io
 from shapely.geometry import LineString, Polygon
 
 st.set_page_config(layout="wide")
 st.title("📐 DXF 개별 업로드: 선로 반경 & 건물 연번 오버랩")
 
-# 사이드바: 2개의 업로드 칸으로 분리
+# 사이드바: 파일 업로드 및 반경 설정
 st.sidebar.header("📁 DXF 파일 업로드")
 uploaded_dxf_route = st.sidebar.file_uploader("1. 선로 DXF 파일 업로드", type=["dxf"])
 uploaded_dxf_building = st.sidebar.file_uploader("2. 건물 DXF 파일 업로드", type=["dxf"])
@@ -15,19 +16,44 @@ uploaded_dxf_building = st.sidebar.file_uploader("2. 건물 DXF 파일 업로드
 buffer_radius = st.sidebar.slider("선로 영향 반경 (m / 단위거리)", min_value=1.0, max_value=50.0, value=10.0, step=1.0)
 
 # -------------------------------------------------------------------
+# DXF 읽기 도우미 함수 (인코딩 및 스트림 처리)
+# -------------------------------------------------------------------
+def load_dxf_doc(uploaded_file):
+    """Streamlit UploadedFile 객체를 ezdxf Drawing 객체로 변환"""
+    bytes_data = uploaded_file.getvalue()
+    
+    # 1차 시도: utf-8 인코딩
+    try:
+        text_stream = io.StringIO(bytes_data.decode('utf-8'))
+        return ezdxf.read(text_stream)
+    except Exception:
+        pass
+
+    # 2차 시도: euc-kr (한글 CAD 파일 대응)
+    try:
+        text_stream = io.StringIO(bytes_data.decode('euc-kr', errors='ignore'))
+        return ezdxf.read(text_stream)
+    except Exception:
+        pass
+
+    # 3차 시도: 기본 ezdxf.read
+    uploaded_file.seek(0)
+    return ezdxf.read(uploaded_file)
+
+# -------------------------------------------------------------------
 # DXF 처리 함수
 # -------------------------------------------------------------------
 
-# 1. 선로 DXF 처리 (선로 레이어 추출 및 버퍼 생성)
+# 1. 선로 DXF 처리 (선로 추출 및 버퍼 연산)
 def process_route_dxf(file, buffer_dist):
-    doc = ezdxf.readfile_line_ending_fix(file)
+    doc = load_dxf_doc(file)
     msp = doc.modelspace()
     routes = []
     
     for entity in msp:
-        layer_name = entity.dxf.layer.strip()
-        # "선로" 레이어 또는 전체 선형 객체 처리
-        if "선로" in layer_name or entity.dxftype() in ['LWPOLYLINE', 'LINE', 'POLYLINE']:
+        layer_name = entity.dxf.layer.strip() if hasattr(entity.dxf, 'layer') else ""
+        
+        if entity.dxftype() in ['LWPOLYLINE', 'LINE', 'POLYLINE']:
             if entity.dxftype() == 'LINE':
                 pts = [(entity.dxf.start.x, entity.dxf.start.y), (entity.dxf.end.x, entity.dxf.end.y)]
             else:
@@ -44,6 +70,12 @@ def process_route_dxf(file, buffer_dist):
                 if buffered_line.geom_type == 'Polygon':
                     buf_x, buf_y = buffered_line.exterior.xy
                     buf_x, buf_y = list(buf_x), list(buf_y)
+                elif buffered_line.geom_type == 'MultiPolygon':
+                    # 다중 폴리곤 처리
+                    for poly in buffered_line.geoms:
+                        bx, by = poly.exterior.xy
+                        buf_x.extend(list(bx) + [None])
+                        buf_y.extend(list(by) + [None])
                 
                 routes.append({
                     "x": x_pts,
@@ -53,38 +85,40 @@ def process_route_dxf(file, buffer_dist):
                 })
     return routes
 
-# 2. 건물 DXF 처리 (건물 레이어 추출 및 중심점/연번 연산)
+# 2. 건물 DXF 처리 (건물 추출 및 중심점/연번 연산)
 def process_building_dxf(file):
-    doc = ezdxf.readfile_line_ending_fix(file)
+    doc = load_dxf_doc(file)
     msp = doc.modelspace()
     buildings = []
     
     for entity in msp:
-        layer_name = entity.dxf.layer.strip()
-        # "건물" 레이어 또는 전체 다각형 객체 처리
-        if "건물" in layer_name or entity.dxftype() in ['LWPOLYLINE', 'POLYLINE']:
-            if entity.dxftype() in ['LWPOLYLINE', 'POLYLINE']:
-                pts = list(entity.vertices()) if entity.dxftype() == 'POLYLINE' else entity.get_points()
-                x_pts = [p[0] for p in pts]
-                y_pts = [p[1] for p in pts]
-                
-                # 닫힌 도형 확인
-                if entity.is_closed or (x_pts[0] == x_pts[-1] and y_pts[0] == y_pts[-1]):
-                    poly_coords = list(zip(x_pts, y_pts))
-                    if len(poly_coords) >= 3:
+        if entity.dxftype() in ['LWPOLYLINE', 'POLYLINE']:
+            pts = list(entity.vertices()) if entity.dxftype() == 'POLYLINE' else entity.get_points()
+            x_pts = [p[0] for p in pts]
+            y_pts = [p[1] for p in pts]
+            
+            # 닫힌 도형 확인
+            is_closed = entity.is_closed if hasattr(entity, 'is_closed') else False
+            if is_closed or (len(x_pts) > 2 and x_pts[0] == x_pts[-1] and y_pts[0] == y_pts[-1]):
+                poly_coords = list(zip(x_pts, y_pts))
+                if len(poly_coords) >= 3:
+                    try:
                         poly = Polygon(poly_coords)
-                        centroid = poly.centroid
-                        buildings.append({
-                            "x": x_pts,
-                            "y": y_pts,
-                            "center_x": centroid.x,
-                            "center_y": centroid.y,
-                            "area": poly.area
-                        })
+                        if poly.is_valid and poly.area > 0:
+                            centroid = poly.centroid
+                            buildings.append({
+                                "x": x_pts,
+                                "y": y_pts,
+                                "center_x": centroid.x,
+                                "center_y": centroid.y,
+                                "area": poly.area
+                            })
+                    except Exception:
+                        continue
     return buildings
 
 # -------------------------------------------------------------------
-# 메인 데이터 처리 및 시각화
+# 데이터 처리 및 화면 출력
 # -------------------------------------------------------------------
 
 routes = process_route_dxf(uploaded_dxf_route, buffer_radius) if uploaded_dxf_route else []
