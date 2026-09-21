@@ -16,27 +16,33 @@ uploaded_dxf_building = st.sidebar.file_uploader("2. 건물 DXF 파일 업로드
 buffer_radius = st.sidebar.slider("선로 영향 반경 (m / 단위거리)", min_value=1.0, max_value=50.0, value=10.0, step=1.0)
 
 # -------------------------------------------------------------------
-# DXF 읽기 도우미 함수 (TypeError 완벽 수정 버전)
+# DXF 읽기 도우미 함수 (ASCII 및 바이너리 DXF 모두 완벽 대응)
 # -------------------------------------------------------------------
 def load_dxf_doc(uploaded_file):
-    """Streamlit 바이너리 데이터를 ezdxf 전용 StringIO 텍스트 스트림으로 안전하게 변환"""
+    """Streamlit UploadedFile 데이터를 바이너리/ASCII 모든 형태에 맞춰 안전하게 파싱"""
     bytes_data = uploaded_file.getvalue()
-    
-    # 1차 시도: utf-8 인코딩으로 텍스트 스트림 변환
+
+    # 1차 시도: 바이너리 스트림 방식 (Binary DXF 대응)
     try:
-        text = bytes_data.decode('utf-8')
+        return ezdxf.read(io.BytesIO(bytes_data))
+    except Exception:
+        pass
+
+    # 2차 시도: utf-8 인코딩 텍스트 스트림
+    try:
+        text = bytes_data.decode('utf-8', errors='replace')
         return ezdxf.read(io.StringIO(text))
     except Exception:
         pass
 
-    # 2차 시도: euc-kr (한글 CAD 도면 인코딩 대응)
+    # 3차 시도: euc-kr (한글 CAD 도면 인코딩 대응)
     try:
         text = bytes_data.decode('euc-kr', errors='ignore')
         return ezdxf.read(io.StringIO(text))
     except Exception:
         pass
 
-    # 3차 시도: latin-1 (바이너리 안전 텍스트 변환)
+    # 4차 시도: latin-1 텍스트 스트림
     text = bytes_data.decode('latin-1', errors='ignore')
     return ezdxf.read(io.StringIO(text))
 
