@@ -156,7 +156,7 @@ st.write("선로 CAD, 건물 CAD, 씨리얼/공공 지도를 좌표 기반으로
 st.sidebar.header("⚙️ 좌표계 및 분석 설정")
 epsg_code = st.sidebar.selectbox(
     "CAD 도면 좌표계 선택 (KOREA EPSG)",
-    ["EPSG:5186 (중부원점 GR380)", "EPSG:5181 (중부원점 Bessel)", "EPSG:5179 (UTM-K 신좌표계)"],
+    ["EPSG:5186 (중부원점 GRS80)", "EPSG:5181 (중부원점 Bessel)", "EPSG:5179 (UTM-K 신좌표계)"],
     index=0
 )
 epsg_num = epsg_code.split()[0]
@@ -197,6 +197,9 @@ if building_file and rail_file:
 
             fig = go.Figure()
 
+            # Plotly 버전 호환성을 위한 Map 트레이스 선택 (Scattermap / Scattermapbox)
+            ScatterMapClass = getattr(go, 'Scattermap', getattr(go, 'Scattermapbox', None))
+
             # 1. 선로 CAD 레이어 오버랩 (빨간색)
             for rail in rail_features:
                 rx_list, ry_list = [], []
@@ -205,7 +208,7 @@ if building_file and rail_file:
                     rx_list.append(lon)
                     ry_list.append(lat)
 
-                fig.add_trace(go.Scattermapbox(
+                fig.add_trace(ScatterMapClass(
                     lon=rx_list, lat=ry_list,
                     mode='lines',
                     line=dict(width=4, color='red'),
@@ -223,7 +226,7 @@ if building_file and rail_file:
                     bx_list.append(lon)
                     by_list.append(lat)
 
-                fig.add_trace(go.Scattermapbox(
+                fig.add_trace(ScatterMapClass(
                     lon=bx_list, lat=by_list,
                     mode='lines',
                     fill='toself',
@@ -239,7 +242,7 @@ if building_file and rail_file:
                 center_lons.append(c_lon)
                 center_lats.append(c_lat)
 
-                fig.add_trace(go.Scattermapbox(
+                fig.add_trace(ScatterMapClass(
                     lon=[c_lon], lat=[c_lat],
                     mode='text',
                     text=[bld["code"]],
@@ -255,17 +258,17 @@ if building_file and rail_file:
             else:
                 avg_lat, avg_lon = 37.5665, 126.9780
 
-            # 3. 씨리얼 / OpenStreetMap 오버랩 레이아웃
-            fig.update_layout(
-                mapbox=dict(
-                    style="open-street-map",
-                    center=dict(lat=avg_lat, lon=avg_lon),
-                    zoom=15
-                ),
-                margin=dict(l=0, r=0, t=30, b=0),
-                height=750,
-                title=f"📌 선로 반경 {buffer_dist}m 오버랩 지도 (마우스 드래그/휠 확대 이동 가능)"
+            # 3. 지도 레이아웃 호환 설정 (map 또는 mapbox)
+            map_config = dict(
+                style="open-street-map",
+                center=dict(lat=avg_lat, lon=avg_lon),
+                zoom=15
             )
+
+            if hasattr(go, 'Scattermap'):
+                fig.update_layout(map=map_config, margin=dict(l=0, r=0, t=30, b=0), height=750)
+            else:
+                fig.update_layout(mapbox=map_config, margin=dict(l=0, r=0, t=30, b=0), height=750)
 
             st.plotly_chart(fig, use_container_width=True)
 
