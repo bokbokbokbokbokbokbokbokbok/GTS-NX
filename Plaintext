@@ -1,8 +1,5 @@
 streamlit
 pandas
 openpyxl
-folium
-streamlit-folium
+plotly
 ezdxf
-geopandas
-pyproj
