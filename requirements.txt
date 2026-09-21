@@ -3,3 +3,4 @@ ezdxf
 pandas
 plotly
 shapely
+openpyxl
