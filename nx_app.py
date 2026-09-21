@@ -1,35 +1,52 @@
 import streamlit as st
 import ezdxf
+from ezdxf import recover
 import pandas as pd
 import plotly.graph_objects as go
 from shapely.geometry import Polygon, LineString, MultiLineString
 import io
+import tempfile
+import os
 
 # ==========================================
-# 1. DXF 로드 공통 함수 (Binary/ASCII & 인코딩 대응)
+# 1. DXF 로드 공통 함수 (Binary/ASCII/인코딩 무조건 대응)
 # ==========================================
 def load_dxf_document(file_input):
     """
-    UploadedFile 객체에서 바이너리/ASCII DXF 및 한글 인코딩을 안전하게 읽어오는 함수
+    UploadedFile 객체를 임시 파일 및 다양한 파서/인코딩 옵션으로 안전하게 로드하는 함수
     """
     file_input.seek(0)
     bytes_data = file_input.read()
-    
-    # 1차 시도: ezdxf 내장 BytesIO 처리 (Binary DXF 및 일반 DXF)
+
+    # 1. 임시 파일 작성을 통한 recover 모드 파싱 (가장 강력함: Binary & Broken ASCII 모두 복구)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp_file:
+        tmp_file.write(bytes_data)
+        tmp_path = tmp_file.name
+
+    try:
+        # ezdxf recover 함수로 구조적 오류 및 인코딩 오류 자동 복구
+        doc, auditor = recover.readfile(tmp_path)
+        os.remove(tmp_path)
+        return doc
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+    # 2. BytesIO 처리 (표준 Binary/ASCII DXF)
     try:
         return ezdxf.read(io.BytesIO(bytes_data))
     except Exception:
         pass
 
-    # 2차 시도: 한글 CP949 / EUC-KR / UTF-8 디코딩 후 StringIO 처리
-    for encoding in ['cp949', 'euc-kr', 'utf-8']:
+    # 3. 한글 CP949 / EUC-KR / UTF-8 강제 디코딩 후 StringIO 처리
+    for encoding in ['cp949', 'euc-kr', 'ansi', 'utf-8']:
         try:
             text_data = bytes_data.decode(encoding, errors='ignore')
             return ezdxf.read(io.StringIO(text_data))
         except Exception:
             continue
 
-    raise ValueError("DXF 인코딩 형식을 해석할 수 없습니다. CAD에서 ASCII DXF로 재저장 후 시도해 보세요.")
+    raise ValueError("DXF 파일 해석에 실패했습니다. 파일이 손상되었거나 지원되지 않는 형식입니다.")
 
 # ==========================================
 # 2. DXF 레이어 목록 추출
@@ -66,12 +83,13 @@ def parse_dxf_by_layer(file_input, target_layer_name):
         dxf_type = entity.dxftype()
         pts = []
 
-        # 올바른 리스트 컴프리핸션 문법 적용
         if dxf_type == 'POLYLINE':
             pts = [(v.dxf.location.x, v.dxf.location.y) for v in entity.vertices]
         elif dxf_type == 'LWPOLYLINE':
             raw_pts = entity.get_points()
             pts = [(p[0], p[1]) for p in raw_pts]
+        elif dxf_type == 'LINE':
+            pts = [(entity.dxf.start.x, entity.dxf.start.y), (entity.dxf.end.x, entity.dxf.end.y)]
 
         if len(pts) >= 2:
             features.append({
@@ -108,7 +126,6 @@ def process_spatial_analysis(building_features, rail_features, buffer_distance):
         except Exception:
             continue
 
-        # 공간 연산: 선로 버퍼 구역과 건물의 교차/포함 여부 판정
         if rail_buffer_zone.intersects(bld_poly):
             centroid_x = bld_poly.centroid.x
             centroid_y = bld_poly.centroid.y
@@ -182,9 +199,9 @@ if building_file is not None and rail_file is not None:
             rail_features = parse_dxf_by_layer(rail_file, selected_rail_layer)
 
         if not bld_features:
-            st.error(f"건물 DXF 파일의 '{selected_bld_layer}' 레이어에서 POLYLINE 객체를 찾지 못했습니다.")
+            st.error(f"건물 DXF 파일의 '{selected_bld_layer}' 레이어에서 POLYLINE/LINE 객체를 찾지 못했습니다.")
         elif not rail_features:
-            st.error(f"선로 DXF 파일의 '{selected_rail_layer}' 레이어에서 POLYLINE 객체를 찾지 못했습니다.")
+            st.error(f"선로 DXF 파일의 '{selected_rail_layer}' 레이어에서 POLYLINE/LINE 객체를 찾지 못했습니다.")
         else:
             filtered_blds, df_buildings = process_spatial_analysis(bld_features, rail_features, buffer_dist)
 
