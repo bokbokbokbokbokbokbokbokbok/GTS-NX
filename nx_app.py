@@ -10,7 +10,7 @@ import io
 # ==========================================
 def parse_dxf_by_layer(file_input, target_layer_name):
     """
-    DXF 파일에서 지정한 레이어(target_layer_name)에 속한 POLYLINE/LWPOLYLINE 좌표 세트를 추출하는 함수
+    DXF 파일에서 지정한 레이어(target_layer_name)에 속한 POLYLINE/LWPOLYLINE 좌표 추출
     """
     try:
         bytes_data = file_input.read()
@@ -23,7 +23,7 @@ def parse_dxf_by_layer(file_input, target_layer_name):
     features = []
 
     for entity in msp:
-        # 레이어명 비교 (대소문자 및 공백 제거 비교)
+        # 레이어명 대소문자 및 공백 무시 비교
         layer_name = entity.dxf.layer if hasattr(entity.dxf, 'layer') else ""
         if target_layer_name.strip() not in layer_name.strip():
             continue
@@ -31,6 +31,7 @@ def parse_dxf_by_layer(file_input, target_layer_name):
         dxf_type = entity.dxftype()
         pts = []
 
+        # POLYLINE 처리 (v.dxf.location 사용 시 올바른 순회 문법)
         if dxf_type == 'POLYLINE':
             pts = [(v.dxf.location.x, v.dxf.location.y) for v in entity.vertices]
         elif dxf_type == 'LWPOLYLINE':
@@ -47,26 +48,20 @@ def parse_dxf_by_layer(file_input, target_layer_name):
     return features
 
 # ==========================================
-# 2. 선로 반경 내 건물 필터링 및 엑셀 생성
+# 2. 선로 반경 내 건물 필터링 및 엑셀 데이터 생성
 # ==========================================
 def process_spatial_analysis(building_features, rail_features, buffer_distance):
     """
-    선로 반경(buffer_distance) 내에 속하는 건물만 필터링하고 연번 및 Shapely 지오메트리 생성
+    선로 반경(buffer_distance) 내에 포함되거나 교차하는 건물만 필터링
     """
-    # 1. 선로 지오메트리 결합 (MultiLineString)
-    rail_lines = []
-    for r in rail_features:
-        if len(r["pts"]) >= 2:
-            rail_lines.append(LineString(r["pts"]))
+    rail_lines = [LineString(r["pts"]) for r in rail_features if len(r["pts"]) >= 2]
     
     if not rail_lines:
         return [], pd.DataFrame()
 
     multi_rail = MultiLineString(rail_lines)
-    # 선로 완충구역(Buffer Zone) 생성
     rail_buffer_zone = multi_rail.buffer(buffer_distance)
 
-    # 2. 건물 필터링
     filtered_buildings = []
     building_records = []
     bld_idx = 1
@@ -74,14 +69,14 @@ def process_spatial_analysis(building_features, rail_features, buffer_distance):
     for bld in building_features:
         pts = bld["pts"]
         if len(pts) < 3:
-            continue  # 면적을 가지지 않는 점/선 건구는 제외
+            continue
 
         try:
             bld_poly = Polygon(pts)
         except Exception:
             continue
 
-        # 선로 반경 영역과 건물이 교차/포함되는지 판정 (Intersects)
+        # 공간 연산: 선로 반경과 건물의 교차 여부 판정
         if rail_buffer_zone.intersects(bld_poly):
             centroid_x = bld_poly.centroid.x
             centroid_y = bld_poly.centroid.y
@@ -137,24 +132,22 @@ with col2:
 if building_file is not None and rail_file is not None:
     if st.button("🚀 영향권 건물 파싱 및 엑셀 생성"):
         with st.spinner("DXF 레이어 파싱 및 공간 분석 수행 중..."):
-            # 레이어 명칭 필터링하여 파싱
             bld_features = parse_dxf_by_layer(building_file, "건물")
             rail_features = parse_dxf_by_layer(rail_file, "선로")
 
         if not bld_features:
-            st.error("건물 DXF 파일에서 '건물' 레이어 객체를 찾지 못했습니다. 레이어명을 확인해 주세요.")
+            st.error("건물 DXF 파일에서 '건물' 레이어 객체를 찾지 못했습니다.")
         elif not rail_features:
-            st.error("선로 DXF 파일에서 '선로' 레이어 객체를 찾지 못했습니다. 레이어명을 확인해 주세요.")
+            st.error("선로 DXF 파일에서 '선로' 레이어 객체를 찾지 못했습니다.")
         else:
-            # 반경 판정 수행
             filtered_blds, df_buildings = process_spatial_analysis(bld_features, rail_features, buffer_dist)
 
-            st.success(f"분석 완료! 전체 건물 중 선로 반경 {buffer_dist}m 이내 건물 {len(filtered_blds)}개가 추출되었습니다.")
+            st.success(f"분석 완료! 선로 반경 {buffer_dist}m 이내 건물 {len(filtered_blds)}개가 추출되었습니다.")
 
             # --- Plotly 시각화 ---
             fig = go.Figure()
 
-            # 1. 선로 그리기 (빨간색)
+            # 1. 선로 (빨간색)
             for rail in rail_features:
                 rx = [p[0] for p in rail["pts"]]
                 ry = [p[1] for p in rail["pts"]]
@@ -164,7 +157,7 @@ if building_file is not None and rail_file is not None:
                     name='선로'
                 ))
 
-            # 2. 반경 내 건물 그리기 (파란색 + 연번 라벨)
+            # 2. 건물 (파란색 + 연번 라벨)
             for bld in filtered_blds:
                 pts = bld["pts"]
                 bx = [p[0] for p in pts] + [pts[0][0]]
@@ -178,7 +171,6 @@ if building_file is not None and rail_file is not None:
                     text=f"연번: {bld['code']}"
                 ))
 
-                # 건물 중심점 라벨
                 fig.add_trace(go.Scatter(
                     x=[bld["centroid"][0]], y=[bld["centroid"][1]],
                     mode='text', text=[bld["code"]],
@@ -196,7 +188,7 @@ if building_file is not None and rail_file is not None:
 
             st.plotly_chart(fig, use_container_width=True)
 
-            # --- 엑셀 데이터 표 및 다운로드 ---
+            # --- 엑셀 표 & 다운로드 ---
             st.subheader("📋 씨리얼(SEE:REAL) 건물 정보 데이터")
             st.dataframe(df_buildings, use_container_width=True)
 
