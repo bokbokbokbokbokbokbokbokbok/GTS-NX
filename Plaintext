@@ -1,4 +1,2 @@
 streamlit
-ezodxf>=1.1.0
-pyparsing
-typing-extensions
+ezodxf
