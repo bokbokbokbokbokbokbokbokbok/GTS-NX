@@ -1,6 +1,5 @@
 streamlit
 pandas
-openpyxl
 plotly
 ezdxf
 shapely
