@@ -7,12 +7,33 @@ from io import BytesIO
 st.set_page_config(page_title="자동 연도변조사 시스템", layout="wide", page_icon="🏗️")
 
 st.title("🏗️ 철도/도로 연도변조사 자동화 시스템")
-st.write("선로 도면(DXF)만 입력하고 반경을 설정하면, 국가공간정보 API(지적/건물)와 연계하여 영향권 내 건물 리스트를 자동 추출하고 건축물대장 기반 엑셀로 출력합니다.")
+st.write("선로 도면(DXF)을 입력하고 기준 레이어와 반경을 설정하면, 국가공간정보 API와 연계하여 영향권 내 건물을 추출하고 엑셀로 출력합니다.")
 
 # 사이드바: 파일 업로드 및 설정
 with st.sidebar:
     st.header("1. 도면 파일 업로드")
     route_dxf = st.file_uploader("선로 도면 업로드 (DXF)", type=['dxf'], key='route')
+    
+    selected_layer = None
+    
+    # 도면이 업로드되었을 때만 레이어 선택칸 표시
+    if route_dxf is not None:
+        st.success("도면 업로드 완료!")
+        
+        # ---------------------------------------------------------
+        # 실제 백엔드 개발 시: ezdxf 라이브러리를 사용해 업로드된 파일의 실제 레이어 목록 추출
+        # 예시: layer_list = [layer.dxf.name for layer in doc.layers]
+        # ---------------------------------------------------------
+        
+        # 현재는 UI 테스트를 위한 가상 레이어 목록
+        mock_layers = ["0", "CENTER_LINE (선로중심선)", "BOUNDARY", "TEXT", "DEFPOINTS"]
+        
+        selected_layer = st.selectbox(
+            "📌 분석에 사용할 선로 레이어 선택", 
+            options=mock_layers, 
+            index=1, 
+            help="도면에서 선로 선형이 그려진 레이어를 선택하세요."
+        )
     
     st.markdown("---")
     st.header("2. 조사 설정")
@@ -24,12 +45,12 @@ if run_button:
     if route_dxf is None:
         st.warning("선로 도면(DXF 파일)을 업로드해주세요.")
     else:
-        with st.spinner(f"선로 반경 {buffer_radius}m 완충구역 생성 및 지도 API 연계 중... (가상 데모)"):
+        with st.spinner(f"'{selected_layer}' 레이어 기준 반경 {buffer_radius}m 완충구역 생성 및 API 연계 중..."):
             import time
             time.sleep(2) # API 호출 시간 시뮬레이션
             
             st.success("지도 API 공간분석 및 건축물대장 정보 추출 완료!")
-            st.subheader(f"📍 선로 반경 {buffer_radius}m 이내 추출 건물 목록 (지도 데이터 기반)")
+            st.subheader(f"📍 추출 기준: [{selected_layer}] 레이어 / 반경 {buffer_radius}m")
             
             # 지도 API(브이월드/씨리얼 등)에서 추출된 건물 명칭과 주소를 반영한 가상 데이터
             output_data = {
