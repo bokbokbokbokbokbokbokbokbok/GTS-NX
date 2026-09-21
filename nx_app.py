@@ -6,15 +6,37 @@ from shapely.geometry import Polygon, LineString, MultiLineString
 import io
 
 # ==========================================
-# 1. DXF 레이어별 파싱 함수
+# 1. DXF 파일에서 전체 레이어 목록 추출
+# ==========================================
+def get_dxf_layers(file_input):
+    """
+    DXF 파일 내 존재하는 모든 레이어 이름 목록 반환
+    """
+    try:
+        file_input.seek(0)
+        bytes_data = file_input.read()
+        # ezdxf.read()를 위한 StringIO 텍스트 스트림 변환
+        text_data = bytes_data.decode('utf-8', errors='ignore')
+        doc = ezdxf.read(io.StringIO(text_data))
+        
+        layers = [layer.dxf.name for layer in doc.layers]
+        return sorted(layers)
+    except Exception as e:
+        st.error(f"DXF 레이어 읽기 오류 ({file_input.name}): {e}")
+        return []
+
+# ==========================================
+# 2. DXF 레이어별 파싱 함수
 # ==========================================
 def parse_dxf_by_layer(file_input, target_layer_name):
     """
     DXF 파일에서 지정한 레이어(target_layer_name)에 속한 POLYLINE/LWPOLYLINE 좌표 추출
     """
     try:
+        file_input.seek(0)
         bytes_data = file_input.read()
-        doc = ezdxf.read(io.BytesIO(bytes_data))
+        text_data = bytes_data.decode('utf-8', errors='ignore')
+        doc = ezdxf.read(io.StringIO(text_data))
     except Exception as e:
         st.error(f"DXF 파일 읽기 오류 ({file_input.name}): {e}")
         return []
@@ -23,15 +45,15 @@ def parse_dxf_by_layer(file_input, target_layer_name):
     features = []
 
     for entity in msp:
-        # 레이어명 대소문자 및 공백 무시 비교
         layer_name = entity.dxf.layer if hasattr(entity.dxf, 'layer') else ""
-        if target_layer_name.strip() not in layer_name.strip():
+        
+        # 선택한 레이어와 일치하는 객체만 추출 (대소문자 구분 없음)
+        if target_layer_name.strip().lower() != layer_name.strip().lower():
             continue
 
         dxf_type = entity.dxftype()
         pts = []
 
-        # POLYLINE 처리 (v.dxf.location 사용 시 올바른 순회 문법)
         if dxf_type == 'POLYLINE':
             pts = [(v.dxf.location.x, v.dxf.location.y) for v in entity.vertices]
         elif dxf_type == 'LWPOLYLINE':
@@ -48,12 +70,9 @@ def parse_dxf_by_layer(file_input, target_layer_name):
     return features
 
 # ==========================================
-# 2. 선로 반경 내 건물 필터링 및 엑셀 데이터 생성
+# 3. 선로 반경 내 건물 필터링 및 엑셀 생성
 # ==========================================
 def process_spatial_analysis(building_features, rail_features, buffer_distance):
-    """
-    선로 반경(buffer_distance) 내에 포함되거나 교차하는 건물만 필터링
-    """
     rail_lines = [LineString(r["pts"]) for r in rail_features if len(r["pts"]) >= 2]
     
     if not rail_lines:
@@ -76,7 +95,6 @@ def process_spatial_analysis(building_features, rail_features, buffer_distance):
         except Exception:
             continue
 
-        # 공간 연산: 선로 반경과 건물의 교차 여부 판정
         if rail_buffer_zone.intersects(bld_poly):
             centroid_x = bld_poly.centroid.x
             centroid_y = bld_poly.centroid.y
@@ -106,7 +124,7 @@ def process_spatial_analysis(building_features, rail_features, buffer_distance):
     return filtered_buildings, df
 
 # ==========================================
-# 3. Streamlit UI 구성
+# 4. Streamlit UI 구성
 # ==========================================
 st.set_page_config(page_title="선로 반경 건물 추출기", layout="wide")
 
@@ -121,24 +139,40 @@ col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("1️⃣ 건물 DXF 업로드")
-    st.caption("※ '건물' 레이어가 포함된 DXF 파일")
     building_file = st.file_uploader("건물 DXF 파일 선택", type=["dxf"], key="bld_file")
 
 with col2:
     st.subheader("2️⃣ 선로 DXF 업로드")
-    st.caption("※ '선로' 레이어가 포함된 DXF 파일")
     rail_file = st.file_uploader("선로 DXF 파일 선택", type=["dxf"], key="rail_file")
 
 if building_file is not None and rail_file is not None:
+    # DXF 내부 레이어 자동 감지
+    bld_layers = get_dxf_layers(building_file)
+    rail_layers = get_dxf_layers(rail_file)
+
+    st.markdown("---")
+    st.subheader("🎯 추출할 레이어 지정")
+    
+    layer_col1, layer_col2 = st.columns(2)
+    with layer_col1:
+        # '건물'이 포함된 레이어를 기본값으로 자동 선택
+        default_bld_idx = next((i for i, l in enumerate(bld_layers) if "건물" in l or "BUILDING" in l.upper()), 0)
+        selected_bld_layer = st.selectbox("건물 DXF 레이어 선택", bld_layers, index=default_bld_idx if bld_layers else 0)
+
+    with layer_col2:
+        # '선로'가 포함된 레이어를 기본값으로 자동 선택
+        default_rail_idx = next((i for i, l in enumerate(rail_layers) if "선로" in l or "RAIL" in l.upper() or "LINE" in l.upper()), 0)
+        selected_rail_layer = st.selectbox("선로 DXF 레이어 선택", rail_layers, index=default_rail_idx if rail_layers else 0)
+
     if st.button("🚀 영향권 건물 파싱 및 엑셀 생성"):
         with st.spinner("DXF 레이어 파싱 및 공간 분석 수행 중..."):
-            bld_features = parse_dxf_by_layer(building_file, "건물")
-            rail_features = parse_dxf_by_layer(rail_file, "선로")
+            bld_features = parse_dxf_by_layer(building_file, selected_bld_layer)
+            rail_features = parse_dxf_by_layer(rail_file, selected_rail_layer)
 
         if not bld_features:
-            st.error("건물 DXF 파일에서 '건물' 레이어 객체를 찾지 못했습니다.")
+            st.error(f"건물 DXF 파일의 '{selected_bld_layer}' 레이어에서 POLYLINE 객체를 찾지 못했습니다.")
         elif not rail_features:
-            st.error("선로 DXF 파일에서 '선로' 레이어 객체를 찾지 못했습니다.")
+            st.error(f"선로 DXF 파일의 '{selected_rail_layer}' 레이어에서 POLYLINE 객체를 찾지 못했습니다.")
         else:
             filtered_blds, df_buildings = process_spatial_analysis(bld_features, rail_features, buffer_dist)
 
