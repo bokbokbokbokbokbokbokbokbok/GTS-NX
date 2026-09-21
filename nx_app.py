@@ -1,96 +1,129 @@
 import streamlit as st
 import pandas as pd
-import folium
-from streamlit_folium import st_folium
+import plotly.graph_objects as go
+import ezdxf  # 실제 DXF 파싱 시 사용
 
 st.set_page_config(layout="wide")
-st.title("🏛️ 건물대장 연번 표 & CAD 수치지도 오버랩")
+st.title("📐 CAD 오버랩 분석: 과업 선로 & 건물 수치지도")
 
-# 1. 건물대장 및 CAD 구역 연치 데이터 (가상 데이터 예시)
-# 실제 환경에서는 ezdxf / geopandas를 통해 DXF 파일을 읽어 좌표(EPSG:5186 등)를 WGS84(EPSG:4326)로 변환하여 사용합니다.
-building_data = [
-    {
-        "연번": 1, "건물명": "1호관 (본관)", "주용도": "업무시설", "층수": "지상 5층",
-        "lat": 37.5665, "lng": 126.9780,
-        "polygon": [[37.5663, 126.9777], [37.5667, 126.9777], [37.5667, 126.9783], [37.5663, 126.9783]]
-    },
-    {
-        "연번": 2, "건물명": "2호관 (연구동)", "주용도": "교육연구시설", "층수": "지상 3층",
-        "lat": 37.5672, "lng": 126.9791,
-        "polygon": [[37.5670, 126.9788], [37.5674, 126.9788], [37.5674, 126.9794], [37.5670, 126.9794]]
-    },
-    {
-        "연번": 3, "건물명": "3호관 (복지관)", "주용도": "근린생활시설", "층수": "지상 2층",
-        "lat": 37.5658, "lng": 126.9772,
-        "polygon": [[37.5656, 126.9769], [37.5660, 126.9769], [37.5660, 126.9775], [37.5656, 126.9775]]
-    }
+# -------------------------------------------------------------------
+# 1. 건물대장 데이터 및 수치지도 샘플 데이터 (실제 DXF 추출 데이터 대체 가능)
+# -------------------------------------------------------------------
+
+# 건물대장 목록 데이터
+building_info = [
+    {"연번": 1, "건물명": "본관 A동", "층수": "지상 5층", "용도": "업무시설", "X": 100, "Y": 200},
+    {"연번": 2, "건물명": "연구동 B동", "층수": "지상 3층", "용도": "교육연구시설", "X": 250, "Y": 300},
+    {"연번": 3, "건물명": "창고 C동", "층수": "지상 1층", "용도": "창고시설", "X": 180, "Y": 120},
+    {"연번": 4, "건물명": "기숙사 D동", "층수": "지상 4층", "용도": "공동주택", "X": 320, "Y": 180},
+]
+df_buildings = pd.DataFrame(building_info)
+
+# [CAD Base 1] 건물 수치지도 다각형(Polygon) 좌표 예시
+cad_buildings_polygons = [
+    # (연번, X좌표 리스트, Y좌표 리스트)
+    (1, [80, 120, 120, 80, 80], [180, 180, 220, 220, 180]),
+    (2, [220, 280, 280, 220, 220], [280, 280, 320, 320, 280]),
+    (3, [160, 200, 200, 160, 160], [100, 100, 140, 140, 100]),
+    (4, [300, 340, 340, 300, 300], [160, 160, 200, 200, 160]),
 ]
 
-df = pd.DataFrame(building_data)
+# [CAD Base 2] 과업 진행 선로 좌표 예시
+cad_work_line = {
+    "X": [50, 100, 180, 250, 320, 380],
+    "Y": [150, 200, 120, 300, 180, 220]
+}
 
-# 레이아웃 구성 (좌측: 표, 우측: 수치지도 오버랩)
-col1, col2 = st.columns([1, 1.2])
+# -------------------------------------------------------------------
+# 2. 화면 화면 구성 (좌: 건물대장 표 / 우: CAD 오버랩 시각화)
+# -------------------------------------------------------------------
+
+col1, col2 = st.columns([1, 1.3])
 
 with col1:
-    st.subheader("📋 건물대장 연번목록")
+    st.subheader("📋 건물대장 정보 목록")
     
-    # 세션 상태를 이용해 표에서 선택한 연번 강조
-    selected_no = st.selectbox("🎯 지도에서 강조할 연번 선택", df["연번"].tolist())
+    # 강조할 연번 선택
+    selected_no = st.selectbox("🔍 지도에서 강조하여 비교할 건물 연번 선택", df_buildings["연번"].tolist())
     
-    # 데이터프레임 출력
+    # 데이터프레임 표시
     st.dataframe(
-        df[["연번", "건물명", "주용도", "층수"]],
+        df_buildings[["연번", "건물명", "용도", "층수"]],
         use_container_width=True,
         hide_index=True
     )
+    
+    # 선택된 건물 상세 정보 표기
+    selected_row = df_buildings[df_buildings["연번"] == selected_no].iloc[0]
+    st.info(f"**[선택된 건물 정보]**\n- **연번**: {selected_row['연번']}번\n- **건물명**: {selected_row['건물명']}\n- **용도**: {selected_row['용도']} ({selected_row['층수']})")
 
 with col2:
-    st.subheader("🗺️ CAD 수치지도 & 연번 위치 오버랩")
+    st.subheader("🖥️ CAD 오버랩 화면 (인터넷 지도 없음)")
     
-    # 지도 중심 설정
-    center_lat = df["lat"].mean()
-    center_lng = df["lng"].mean()
-    
-    # 기본 지도 생성 (VWorld/위성지도 타일 스타일 적용 가능)
-    m = folium.Map(location=[center_lat, center_lng], zoom_start=17)
-    
-    # CAD 수치지도 선형 데이터(Polygon) 및 연번 오버랩 출력
-    for _, row in df.iterrows():
-        is_selected = (row["연번"] == selected_no)
-        
-        # 1) CAD 수치지도 폴리곤 레이어 (경계선)
-        folium.Polygon(
-            locations=row["polygon"],
-            color="#FF3333" if is_selected else "#2B579A",  # 선택된 건물은 빨간색 강조
-            weight=3 if is_selected else 2,
-            fill=True,
-            fill_color="#FF8888" if is_selected else "#3388ff",
-            fill_opacity=0.4 if is_selected else 0.2,
-            tooltip=f"CAD 레이어 [연번 {row['연번']}]"
-        ).add_to(m)
-        
-        # 2) 연번 라벨 마커 (숫자 표기)
-        icon_html = f"""
-            <div style="
-                font-size: 12px;
-                font-weight: bold;
-                color: white;
-                background-color: {'#FF3333' if is_selected else '#1E3A8A'};
-                border-radius: 4px;
-                padding: 2px 6px;
-                border: 1px solid white;
-                box-shadow: 1px 1px 4px rgba(0,0,0,0.4);
-                white-space: nowrap;
-            ">
-                No.{row['연번']}
-            </div>
-        """
-        
-        folium.Marker(
-            location=[row["lat"], row["lng"]],
-            popup=f"<b>[연번 {row['연번']}] {row['건물명']}</b><br>{row['주용도']}",
-            icon=folium.DivIcon(html=icon_html, icon_size=(40, 20))
-        ).add_to(m)
+    fig = go.Figure()
 
-    # 마우스 조작 가능한 Folium 지도 출력
-    st_folium(m, width="100%", height=550)
+    # 1 LAYER: [CAD 1] 건물 수치지도 (Polygon) 그리기
+    for b_no, x_pts, y_pts in cad_buildings_polygons:
+        is_selected = (b_no == selected_no)
+        
+        fig.add_trace(go.Scatter(
+            x=x_pts,
+            y=y_pts,
+            fill="toself",
+            fillcolor="rgba(239, 68, 68, 0.4)" if is_selected else "rgba(59, 130, 246, 0.2)",
+            line=dict(
+                color="red" if is_selected else "#2563EB",
+                width=3 if is_selected else 1.5
+            ),
+            name=f"건물 (No.{b_no})",
+            hoverinfo="text",
+            hovertext=f"건물 연번: No.{b_no}",
+            showlegend=False
+        ))
+
+    # 2 LAYER: [CAD 2] 과업 진행 선로 (Line) 그리기
+    fig.add_trace(go.Scatter(
+        x=cad_work_line["X"],
+        y=cad_work_line["Y"],
+        mode="lines+markers",
+        line=dict(color="#10B981", width=3, dash="dash"),
+        marker=dict(size=6, color="#047857"),
+        name="과업 진행 선로",
+        hoverinfo="text",
+        hovertext="과업 진행 선로 구간"
+    ))
+
+    # 3 LAYER: 건물 중앙에 [연번 번호 표기]
+    for _, row in df_buildings.iterrows():
+        b_no = row["연번"]
+        is_selected = (b_no == selected_no)
+        
+        fig.add_trace(go.Scatter(
+            x=[row["X"]],
+            y=[row["Y"]],
+            mode="text",
+            text=[f"<b>[{b_no}]</b>"],
+            textposition="middle center",
+            textfont=dict(
+                size=14 if is_selected else 11,
+                color="red" if is_selected else "#1E293B"
+            ),
+            hoverinfo="text",
+            hovertext=f"No.{b_no} {row['건물명']}",
+            showlegend=False
+        ))
+
+    # 차트 레이아웃 설정 (배경을 깔끔한 모눈종이/백지 형태로 설정, 비율 유지)
+    fig.update_layout(
+        xaxis=dict(showgrid=True, zeroline=False, scaleanchor="y", scaleratio=1),
+        yaxis=dict(showgrid=True, zeroline=False),
+        plot_bgcolor="#F8FAFC",
+        paper_bgcolor="#FFFFFF",
+        margin=dict(l=20, r=20, t=30, b=20),
+        height=550,
+        dragmode="pan",  # 기본 마우스 동작을 이동(Pan)으로 설정
+        legend=dict(x=0.02, y=0.98, bgcolor="rgba(255,255,255,0.8)")
+    )
+
+    # Plotly 차트 출력 (마우스 휠 조작 활성화)
+    st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True})
