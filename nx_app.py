@@ -9,11 +9,12 @@ import shapely.geometry as sg
 import shapely.ops as so
 import folium
 from streamlit_folium import st_folium
+import requests  # 실시간 건물 데이터 API 호출용
 
 st.set_page_config(page_title="자동 연도변조사 시스템", layout="wide", page_icon="🏗️")
 
 st.title("🏗️ 철도/도로 연도변조사 자동화 시스템")
-st.write("실제 DXF 선형을 추출하여 지도에 투영하고, 주변 건물의 연번과 대장 정보를 시각화합니다.")
+st.write("도면 선형을 바탕으로 반경을 생성하고, 영역 내에 걸쳐있는 모든 실제 건물을 실시간으로 추출합니다.")
 
 # 사이드바: 파일 업로드 및 설정
 with st.sidebar:
@@ -28,7 +29,6 @@ with st.sidebar:
             "📍 도면 좌표계 선택", 
             options=["epsg:5186 (중부원점)", "epsg:5187 (동부원점)", "epsg:5179 (UTM-K)", "epsg:4326 (WGS84)"],
             index=0,
-            help="도면 작성 시 사용된 좌표계를 선택하세요. (기본값: 중부원점)"
         ).split(" ")[0]
 
         with tempfile.NamedTemporaryFile(delete=False, suffix='.dxf') as tmp_file:
@@ -39,12 +39,7 @@ with st.sidebar:
             doc = ezdxf.readfile(tmp_file_path)
             layer_list = [layer.dxf.name for layer in doc.layers]
             layer_list.sort()
-            
-            selected_layer = st.selectbox(
-                "📌 분석에 사용할 선로 레이어 선택", 
-                options=layer_list, 
-                help="도면에서 선로 선형(중심선 등)이 그려진 실제 레이어를 선택하세요."
-            )
+            selected_layer = st.selectbox("📌 분석 선로 레이어 선택", options=layer_list)
         except Exception as e:
             st.error(f"도면 분석 오류: {e}")
             selected_layer = None
@@ -58,12 +53,12 @@ with st.sidebar:
 
 # 메인 화면 영역
 if run_button:
-    with st.spinner(f"DXF 선형 추출 및 반경 {buffer_radius}m 폴리곤 생성 중..."):
+    with st.spinner(f"선형 추출 및 반경 {buffer_radius}m 내 실제 건물 검색 중... (수십 초 소요될 수 있습니다)"):
         
         msp = doc.modelspace()
         lines_in_proj = []
         
-        # 1. 도면에서 선택한 레이어의 실제 선형 데이터 추출 (미터 단위 좌표계)
+        # 1. 도면 선형 추출
         for entity in msp.query(f'*[layer=="{selected_layer}"]'):
             if entity.dxftype() == 'LINE':
                 start, end = entity.dxf.start, entity.dxf.end
@@ -80,66 +75,100 @@ if run_button:
             
         os.remove(tmp_file_path)
         
-        # 2. 공간 연산: 선형 병합 및 지정된 반경(m)만큼 진짜 다각형(Buffer) 생성
+        # 2. 버퍼(반경) 생성 및 좌표 변환
         multi_line = sg.MultiLineString(lines_in_proj)
-        buffer_poly = multi_line.buffer(buffer_radius) # 픽셀이 아닌 실제 미터 단위 버퍼
+        buffer_poly = multi_line.buffer(buffer_radius)
         
-        # 3. 좌표계 변환 (캐드 좌표 -> 지도 위경도 WGS84)
         transformer = Transformer.from_crs(epsg_code, "epsg:4326", always_xy=True)
         def project_to_wgs84(x, y):
             return transformer.transform(x, y)
         
         multi_line_wgs84 = so.transform(project_to_wgs84, multi_line)
         buffer_poly_wgs84 = so.transform(project_to_wgs84, buffer_poly)
-        
-        # 지도 중심점 찾기
         center_lon, center_lat = buffer_poly_wgs84.centroid.coords[0]
         
-        st.success("실제 반경 기반 공간분석 완료!")
+        # 3. OpenStreetMap API를 통한 반경 내 실제 건물 추출
+        min_lon, min_lat, max_lon, max_lat = buffer_poly_wgs84.bounds
+        overpass_url = "http://overpass-api.de/api/interpreter"
+        # Bounding Box 내의 모든 건물(way) 검색
+        overpass_query = f"""
+        [out:json];
+        (
+          way["building"]({min_lat},{min_lon},{max_lat},{max_lon});
+        );
+        out geom;
+        """
+        
+        bldg_data = []
+        try:
+            response = requests.get(overpass_url, params={'data': overpass_query})
+            osm_data = response.json()
+            
+            bldg_id = 1
+            for element in osm_data.get('elements', []):
+                if element['type'] == 'way':
+                    # 건물 폴리곤(외곽선) 좌표 생성
+                    coords = [(node['lon'], node['lat']) for node in element.get('geometry', [])]
+                    if len(coords) >= 3:
+                        bldg_poly = sg.Polygon(coords)
+                        
+                        # 핵심: 건물이 생성한 반경(buffer_poly_wgs84)에 걸쳐있거나(intersects) 포함되는지 검사
+                        if bldg_poly.intersects(buffer_poly_wgs84):
+                            center = bldg_poly.centroid
+                            tags = element.get('tags', {})
+                            name = tags.get('name', '명칭없음')
+                            addr = tags.get('addr:street', '') + " " + tags.get('addr:housenumber', '')
+                            if addr.strip() == "":
+                                addr = "주소정보 없음"
+                                
+                            bldg_data.append({
+                                "id": bldg_id,
+                                "lat": center.y,
+                                "lon": center.x,
+                                "name": name,
+                                "addr": addr.strip(),
+                                "polygon": coords # 시각화를 위한 외곽선 저장
+                            })
+                            bldg_id += 1
+        except Exception as e:
+            st.warning(f"건물 데이터를 불러오는데 실패했습니다: {e}")
+
+        st.success(f"공간분석 완료! 반경 내 걸쳐있는 실제 건물 총 {len(bldg_data)}동을 찾았습니다.")
         
         # ---------------------------------------------------------
-        # 지도 시각화
+        # 4. 지도 시각화
         # ---------------------------------------------------------
-        st.subheader("🗺️ 공간 분석 결과 (연번 마커 적용)")
-        m = folium.Map(location=[center_lat, center_lon], zoom_start=15, tiles="OpenStreetMap")
+        st.subheader("🗺️ 공간 분석 결과 (실제 걸쳐있는 건물 추출)")
+        m = folium.Map(location=[center_lat, center_lon], zoom_start=16, tiles="OpenStreetMap")
         
-        # 고정된 반경 다각형 (지도를 확대/축소해도 실제 반경 영역 유지)
+        # 반경 다각형
         folium.GeoJson(
             buffer_poly_wgs84,
-            style_function=lambda x: {'fillColor': 'blue', 'color': 'blue', 'weight': 1, 'fillOpacity': 0.3},
-            tooltip=f"영향권 반경 {buffer_radius}m"
+            style_function=lambda x: {'fillColor': 'blue', 'color': 'blue', 'weight': 1, 'fillOpacity': 0.2}
         ).add_to(m)
         
-        # 캐드 선형
+        # 선형
         folium.GeoJson(
             multi_line_wgs84,
             style_function=lambda x: {'color': 'red', 'weight': 3}
         ).add_to(m)
         
-        # 가상 건물 마커 생성 (선형을 따라 고르게 배치)
-        bldg_data = []
-        for i in range(1, 6):
-            # 선형의 10%, 30%, 50%, 70%, 90% 위치에 가상 건물 배치
-            pt = multi_line_wgs84.interpolate(i * 0.18, normalized=True)
-            bldg_data.append({
-                "id": i,
-                "lat": pt.y + 0.0001, # 선 옆으로 살짝 이동
-                "lon": pt.x + 0.0001,
-                "name": ["상가", "단독주택", "창고", "비닐하우스", "주민센터"][i-1],
-                "addr": f"인근 지번 10-{i}"
-            })
-            
-        # 지도에 번호가 적힌 깔끔한 원형 마커 추가
+        # 추출된 실제 건물 외곽선 및 연번 마커 표시
         for bldg in bldg_data:
-            popup_html = f"<b>연번: {bldg['id']}</b><br>명칭: {bldg['name']}<br>주소: {bldg['addr']}"
+            # 건물 실제 형상(외곽선) 그리기
+            folium.Polygon(
+                locations=[(lat, lon) for lon, lat in bldg['polygon']],
+                color='black', weight=1, fillColor='yellow', fillOpacity=0.6
+            ).add_to(m)
             
-            # CSS를 활용한 숫자 마커 (글자 겹침 해결)
+            # 중심에 연번 마커 추가
+            popup_html = f"<b>연번: {bldg['id']}</b><br>명칭: {bldg['name']}<br>주소: {bldg['addr']}"
             number_icon = folium.DivIcon(html=f"""
                 <div style="
-                    background-color: white; border: 2.5px solid #28a745; border-radius: 50%;
-                    width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
-                    font-weight: 900; color: #28a745; box-shadow: 2px 2px 4px rgba(0,0,0,0.4);
-                    font-size: 14px; margin-left: -16px; margin-top: -16px;
+                    background-color: white; border: 2px solid #e74c3c; border-radius: 50%;
+                    width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;
+                    font-weight: bold; color: #e74c3c; box-shadow: 1px 1px 3px rgba(0,0,0,0.5);
+                    font-size: 12px; margin-left: -12px; margin-top: -12px;
                 ">{bldg['id']}</div>
             """)
             
@@ -151,48 +180,38 @@ if run_button:
             ).add_to(m)
             
         st_folium(m, width="100%", height=600, returned_objects=[])
-
         st.markdown("---")
         
         # ---------------------------------------------------------
-        # 추출 데이터 표 영역 및 다운로드
+        # 5. 추출 데이터 표 영역 및 다운로드
         # ---------------------------------------------------------
         st.subheader(f"📍 추출된 건축물대장 목록 (총 {len(bldg_data)}건)")
         
-        output_data = {
-            "연번": [b["id"] for b in bldg_data],
-            "명칭": [b["name"] for b in bldg_data],
-            "도로명": ["-"] * len(bldg_data),
-            "지번": [b["addr"] for b in bldg_data],
-            "구조형식": ["철근콘크리트구조", "일반철골구조", "경량철골구조", "", "철근콘크리트구조"],
-            "높이(m)\n(건축면적, m2)": ["12.5 (135)", "15.0 (300)", "5.5 (250)", "", "20.1 (500)"],
-            "층수\n(지하/지상)": ["1/3", "1/4", "0/1", "", "2/5"],
-            "용도": ["제1종근린생활시설", "단독주택", "창고시설", "동식물관련시설", "공공업무시설"],
-            "준공년도": ["20150512", "20200115", "20081020", "", "20180911"],
-            "기한": ["10~20년", "10년 미만", "20~30년", "", "10년 미만"],
-            "등급": ["B", "A", "C", "", "A"],
-            "기초형식\n(내진설계)": ["지내력기초(내진적용)", "내진적용", "내진 비적용", "", "말뚝기초(내진적용)"],
-            "건축물대장\n유무": ["O", "O", "O", "X", "O"],
-            "도면\n보유현황": ["X", "O", "X", "", "O"],
-            "비고(지역 및 구역 등)": ["상업지역", "제1종일반주거지역", "자연녹지", "개발제한구역", "제2종일반주거지역"]
-        }
-        
-        df_result = pd.DataFrame(output_data)
-        
-        # Streamlit 표 시각화
-        st.dataframe(df_result, use_container_width=True)
-        
-        # 엑셀 다운로드
-        def convert_df_to_excel(df):
-            output = BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df.to_excel(writer, index=False, sheet_name='연도변조사 현황')
-            return output.getvalue()
+        if len(bldg_data) > 0:
+            output_data = {
+                "연번": [b["id"] for b in bldg_data],
+                "명칭": [b["name"] for b in bldg_data],
+                "주소": [b["addr"] for b in bldg_data],
+                "구조형식": ["조사필요"] * len(bldg_data),
+                "높이/면적": ["조사필요"] * len(bldg_data),
+                "층수": ["조사필요"] * len(bldg_data),
+                "용도": ["조사필요"] * len(bldg_data),
+            }
+            df_result = pd.DataFrame(output_data)
+            st.dataframe(df_result, use_container_width=True)
+            
+            def convert_df_to_excel(df):
+                output = BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df.to_excel(writer, index=False, sheet_name='연도변조사 현황')
+                return output.getvalue()
 
-        st.download_button(
-            label="📥 엑셀 파일로 다운로드 (연도변조사 현황 양식)",
-            data=convert_df_to_excel(df_result),
-            file_name=f"연도변조사결과_반경{buffer_radius}m.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary"
-        )
+            st.download_button(
+                label="📥 엑셀 파일로 다운로드",
+                data=convert_df_to_excel(df_result),
+                file_name=f"연도변조사결과_실제건물_{buffer_radius}m.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary"
+            )
+        else:
+            st.info("해당 반경 내에 검색된 건물이 없습니다.")
