@@ -1,240 +1,59 @@
-import streamlit as st
-import pandas as pd
-import plotly.graph_objects as go
-import ezdxf
-import tempfile
-import os
-import io
-from shapely.geometry import LineString, Polygon
+import ezodxf
 
-st.set_page_config(layout="wide")
-st.title("📐 DXF 개별 업로드: 선로 반경 & 건물 연번 오버랩")
-
-# 사이드바: 파일 업로드 및 반경 설정
-st.sidebar.header("📁 DXF 파일 업로드")
-uploaded_dxf_route = st.sidebar.file_uploader("1. 선로 DXF 파일 업로드", type=["dxf"])
-uploaded_dxf_building = st.sidebar.file_uploader("2. 건물 DXF 파일 업로드", type=["dxf"])
-
-buffer_radius = st.sidebar.slider("선로 영향 반경 (m / 단위거리)", min_value=1.0, max_value=50.0, value=10.0, step=1.0)
-
-# -------------------------------------------------------------------
-# DXF 읽기 도우미 함수 (임시 파일 저장 및 다중 인코딩 fallback)
-# -------------------------------------------------------------------
-def load_dxf_doc(uploaded_file):
+def process_building_dxf(file_input):
     """
-    Streamlit UploadedFile 객체를 임시 파일로 저장 후 ezdxf로 로드.
-    바이너리/ASCII 및 다양한 인코딩(EUC-KR, UTF-8 등)을 완벽 지원합니다.
+    Streamlit DXF 업로드 파일에서 건물 레이어의 POLYLINE, LWPOLYLINE, HATCH 좌표를 안전하게 추출하는 함수
     """
-    raw_bytes = uploaded_file.getvalue()
-
-    # 1. 임시 파일 생성 후 ezdxf.readfile 로드 (가장 안정적)
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp_file:
-            tmp_file.write(raw_bytes)
-            tmp_path = tmp_file.name
-        
-        doc = ezdxf.readfile(tmp_path)
-        os.remove(tmp_path)
-        return doc
-    except Exception:
-        if 'tmp_path' in locals() and os.path.exists(tmp_path):
-            os.remove(tmp_path)
-
-    # 2. EUC-KR / CP949 (한국어 CAD 도면 인코딩 대응)
-    try:
-        text_euckr = raw_bytes.decode('euc-kr', errors='ignore')
-        return ezdxf.read(io.StringIO(text_euckr))
-    except Exception:
-        pass
-
-    # 3. UTF-8 fallback
-    try:
-        text_utf8 = raw_bytes.decode('utf-8', errors='ignore')
-        return ezdxf.read(io.StringIO(text_utf8))
-    except Exception:
-        pass
-
-    return None
-
-# -------------------------------------------------------------------
-# DXF 처리 함수
-# -------------------------------------------------------------------
-
-# 1. 선로 DXF 처리 (선로 추출 및 버퍼 연산)
-def process_route_dxf(file, buffer_dist):
-    doc = load_dxf_doc(file)
-    if doc is None:
-        st.error("❌ 선로 DXF 파일을 읽을 수 없습니다. CAD에서 ASCII DXF 형식으로 다시 저장해 주세요.")
-        return []
-        
-    msp = doc.modelspace()
-    routes = []
-    
-    for entity in msp:
-        if entity.dxftype() in ['LWPOLYLINE', 'LINE', 'POLYLINE']:
-            if entity.dxftype() == 'LINE':
-                pts = [(entity.dxf.start.x, entity.dxf.start.y), (entity.dxf.end.x, entity.dxf.end.y)]
-            else:
-                pts = [(p[0], p[1]) for p in entity.get_points()]
-            
-            x_pts = [p[0] for p in pts]
-            y_pts = [p[1] for p in pts]
-            
-            if len(pts) >= 2:
-                line = LineString(pts)
-                buffered_line = line.buffer(buffer_dist)
-                
-                buf_x, buf_y = [], []
-                if buffered_line.geom_type == 'Polygon':
-                    buf_x, buf_y = buffered_line.exterior.xy
-                    buf_x, buf_y = list(buf_x), list(buf_y)
-                elif buffered_line.geom_type == 'MultiPolygon':
-                    for poly in buffered_line.geoms:
-                        bx, by = poly.exterior.xy
-                        buf_x.extend(list(bx) + [None])
-                        buf_y.extend(list(by) + [None])
-                
-                routes.append({
-                    "x": x_pts,
-                    "y": y_pts,
-                    "buf_x": buf_x,
-                    "buf_y": buf_y
-                })
-    return routes
-
-# 2. 건물 DXF 처리 (건물 추출 및 중심점/연번 연산)
-def process_building_dxf(file):
-    doc = load_dxf_doc(file)
-    if doc is None:
-        st.error("❌ 건물 DXF 파일을 읽을 수 없습니다. CAD에서 ASCII DXF 형식으로 다시 저장해 주세요.")
+        # Streamlit UploadedFile 객체 또는 파일 경로 처리
+        doc = ezodxf.read(file_input)
+    except Exception as e:
+        print(f"DXF 읽기 오류: {e}")
         return []
 
     msp = doc.modelspace()
     buildings = []
-    
+
     for entity in msp:
-        if entity.dxftype() in ['LWPOLYLINE', 'POLYLINE']:
-            pts = list(entity.vertices()) if entity.dxftype() == 'POLYLINE' else entity.get_points()
-            x_pts = [p[0] for p in pts]
-            y_pts = [p[1] for p in pts]
-            
-            # 닫힌 도형 확인
-            is_closed = entity.is_closed if hasattr(entity, 'is_closed') else False
-            if is_closed or (len(x_pts) > 2 and x_pts[0] == x_pts[-1] and y_pts[0] == y_pts[-1]):
-                poly_coords = list(zip(x_pts, y_pts))
-                if len(poly_coords) >= 3:
-                    try:
-                        poly = Polygon(poly_coords)
-                        if poly.is_valid and poly.area > 0:
-                            centroid = poly.centroid
-                            buildings.append({
-                                "x": x_pts,
-                                "y": y_pts,
-                                "center_x": centroid.x,
-                                "center_y": centroid.y,
-                                "area": poly.area
-                            })
-                    except Exception:
-                        continue
+        # 건물 레이어 또는 관련 도면 객체 탐색 (필요 시 레이어 이름 조건 추가 가능)
+        dxftype = entity.dxftype()
+        pts = []
+
+        # 1. 2D/3D POLYLINE 처리
+        if dxftype == 'POLYLINE':
+            pts = [(v.dxf.location.x, v.dxf.location.y) for v in entity.vertices()]
+
+        # 2. LWPOLYLINE (경량 폴리라인) 처리
+        elif dxftype == 'LWPOLYLINE':
+            # get_points()는 (x, y, start_width, end_width, bulge)를 반환하므로 (x, y)만 추출
+            raw_pts = entity.get_points()
+            pts = [(p[0], p[1]) for p in raw_pts]
+
+        # 3. HATCH (해치) 처리 - TypeError 원인 해결 구문
+        elif dxftype == 'HATCH':
+            for path in entity.paths:
+                # Path 형태가 PolylinePath인 경우
+                if hasattr(path, 'vertices') and path.vertices:
+                    pts.extend([(v[0], v[1]) for v in path.vertices])
+                
+                # Path 형태가 EdgePath인 경우 (LineEdge, ArcEdge 등)
+                elif hasattr(path, 'edges') and path.edges:
+                    for edge in path.edges:
+                        # LineEdge 형태 처리
+                        if hasattr(edge, 'start') and hasattr(edge, 'end'):
+                            pts.append((edge.start[0], edge.start[1]))
+                            pts.append((edge.end[0], edge.end[1]))
+                        # ArcEdge / EllipseEdge 형태 처리
+                        elif hasattr(edge, 'center'):
+                            pts.append((edge.center[0], edge.center[1]))
+
+        # 좌표 추출에 성공한 경우만 건물 데이터 목록에 추가
+        if pts:
+            buildings.append({
+                'id': entity.dxf.handle if hasattr(entity.dxf, 'handle') else None,
+                'layer': entity.dxf.layer if hasattr(entity.dxf, 'layer') else '0',
+                'type': dxftype,
+                'coordinates': pts
+            })
+
     return buildings
-
-# -------------------------------------------------------------------
-# 데이터 처리 및 화면 출력
-# -------------------------------------------------------------------
-
-routes = process_route_dxf(uploaded_dxf_route, buffer_radius) if uploaded_dxf_route else []
-buildings = process_building_dxf(uploaded_dxf_building) if uploaded_dxf_building else []
-
-# 건물 데이터 연번 부여
-b_data = []
-for idx, b in enumerate(buildings, start=1):
-    b_data.append({
-        "연번": idx,
-        "중심_X": round(b["center_x"], 2),
-        "중심_Y": round(b["center_y"], 2),
-        "면적": round(b["area"], 2),
-        "raw": b
-    })
-df_buildings = pd.DataFrame(b_data)
-
-col1, col2 = st.columns([1, 1.3])
-
-with col1:
-    st.subheader("📋 건물대장 연번 목록")
-    if not df_buildings.empty:
-        selected_no = st.selectbox("🎯 강조 표시할 건물 연번 선택", df_buildings["연번"].tolist())
-        st.dataframe(
-            df_buildings[["연번", "면적", "중심_X", "중심_Y"]],
-            use_container_width=True,
-            hide_index=True
-        )
-    else:
-        selected_no = None
-        st.info("👈 사이드바에서 건물 DXF 파일을 업로드해 주세요.")
-
-with col2:
-    st.subheader("🖥️ CAD 통합 오버랩 화면")
-    fig = go.Figure()
-
-    # [1] 선로 및 반경 표시
-    for r in routes:
-        if r["buf_x"]:
-            fig.add_trace(go.Scatter(
-                x=r["buf_x"], y=r["buf_y"],
-                fill="toself",
-                fillcolor="rgba(16, 185, 129, 0.2)",
-                line=dict(color="rgba(16, 185, 129, 0.4)", width=1),
-                name="선로 영향 반경",
-                hoverinfo="skip",
-                showlegend=False
-            ))
-        fig.add_trace(go.Scatter(
-            x=r["x"], y=r["y"],
-            mode="lines",
-            line=dict(color="#059669", width=3),
-            name="선로"
-        ))
-
-    # [2] 건물 및 연번 표시
-    for item in b_data:
-        b_no = item["연번"]
-        b_info = item["raw"]
-        is_selected = (b_no == selected_no)
-
-        fig.add_trace(go.Scatter(
-            x=b_info["x"], y=b_info["y"],
-            fill="toself",
-            fillcolor="rgba(239, 68, 68, 0.4)" if is_selected else "rgba(59, 130, 246, 0.2)",
-            line=dict(
-                color="red" if is_selected else "#2563EB",
-                width=3 if is_selected else 1.5
-            ),
-            showlegend=False,
-            hoverinfo="text",
-            hovertext=f"건물 연번: No.{b_no}"
-        ))
-
-        # 건물 중심에 연번 표기
-        fig.add_trace(go.Scatter(
-            x=[b_info["center_x"]],
-            y=[b_info["center_y"]],
-            mode="text",
-            text=[f"<b>[{b_no}]</b>"],
-            textposition="middle center",
-            textfont=dict(
-                size=14 if is_selected else 11,
-                color="red" if is_selected else "#1E293B"
-            ),
-            showlegend=False,
-            hoverinfo="skip"
-        ))
-
-    fig.update_layout(
-        xaxis=dict(showgrid=True, zeroline=False, scaleanchor="y", scaleratio=1),
-        yaxis=dict(showgrid=True, zeroline=False),
-        plot_bgcolor="#F8FAFC",
-        height=600,
-        dragmode="pan"
-    )
-
-    st.plotly_chart(fig, use_container_width=True, config={"scrollZoom": True})
