@@ -16,29 +16,29 @@ uploaded_dxf_building = st.sidebar.file_uploader("2. 건물 DXF 파일 업로드
 buffer_radius = st.sidebar.slider("선로 영향 반경 (m / 단위거리)", min_value=1.0, max_value=50.0, value=10.0, step=1.0)
 
 # -------------------------------------------------------------------
-# DXF 읽기 도우미 함수 (인코딩 및 스트림 처리)
+# DXF 읽기 도우미 함수 (TypeError 완벽 수정 버전)
 # -------------------------------------------------------------------
 def load_dxf_doc(uploaded_file):
-    """Streamlit UploadedFile 객체를 ezdxf Drawing 객체로 변환"""
+    """Streamlit 바이너리 데이터를 ezdxf 전용 StringIO 텍스트 스트림으로 안전하게 변환"""
     bytes_data = uploaded_file.getvalue()
     
-    # 1차 시도: utf-8 인코딩
+    # 1차 시도: utf-8 인코딩으로 텍스트 스트림 변환
     try:
-        text_stream = io.StringIO(bytes_data.decode('utf-8'))
-        return ezdxf.read(text_stream)
+        text = bytes_data.decode('utf-8')
+        return ezdxf.read(io.StringIO(text))
     except Exception:
         pass
 
-    # 2차 시도: euc-kr (한글 CAD 파일 대응)
+    # 2차 시도: euc-kr (한글 CAD 도면 인코딩 대응)
     try:
-        text_stream = io.StringIO(bytes_data.decode('euc-kr', errors='ignore'))
-        return ezdxf.read(text_stream)
+        text = bytes_data.decode('euc-kr', errors='ignore')
+        return ezdxf.read(io.StringIO(text))
     except Exception:
         pass
 
-    # 3차 시도: 기본 ezdxf.read
-    uploaded_file.seek(0)
-    return ezdxf.read(uploaded_file)
+    # 3차 시도: latin-1 (바이너리 안전 텍스트 변환)
+    text = bytes_data.decode('latin-1', errors='ignore')
+    return ezdxf.read(io.StringIO(text))
 
 # -------------------------------------------------------------------
 # DXF 처리 함수
@@ -51,8 +51,6 @@ def process_route_dxf(file, buffer_dist):
     routes = []
     
     for entity in msp:
-        layer_name = entity.dxf.layer.strip() if hasattr(entity.dxf, 'layer') else ""
-        
         if entity.dxftype() in ['LWPOLYLINE', 'LINE', 'POLYLINE']:
             if entity.dxftype() == 'LINE':
                 pts = [(entity.dxf.start.x, entity.dxf.start.y), (entity.dxf.end.x, entity.dxf.end.y)]
@@ -71,7 +69,6 @@ def process_route_dxf(file, buffer_dist):
                     buf_x, buf_y = buffered_line.exterior.xy
                     buf_x, buf_y = list(buf_x), list(buf_y)
                 elif buffered_line.geom_type == 'MultiPolygon':
-                    # 다중 폴리곤 처리
                     for poly in buffered_line.geoms:
                         bx, by = poly.exterior.xy
                         buf_x.extend(list(bx) + [None])
