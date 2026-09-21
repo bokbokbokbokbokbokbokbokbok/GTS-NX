@@ -22,9 +22,9 @@ def process_building_dxf(file_input):
         dxf_type = entity.dxftype()
         pts = []
 
-        # 1. 2D/3D POLYLINE 처리
+        # 1. 2D/3D POLYLINE 처리 (문법 오류 수정됨)
         if dxf_type == 'POLYLINE':
-            pts = [(v.dxf.location.x, v.dxf.location.y) for v.dxf.vertices]
+            pts = [(v.dxf.location.x, v.dxf.location.y) for v in entity.vertices]
 
         # 2. LWPOLYLINE (경량 폴리라인) 처리
         elif dxf_type == 'LWPOLYLINE':
