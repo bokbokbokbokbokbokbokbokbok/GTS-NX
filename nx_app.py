@@ -16,35 +16,35 @@ uploaded_dxf_building = st.sidebar.file_uploader("2. 건물 DXF 파일 업로드
 buffer_radius = st.sidebar.slider("선로 영향 반경 (m / 단위거리)", min_value=1.0, max_value=50.0, value=10.0, step=1.0)
 
 # -------------------------------------------------------------------
-# DXF 읽기 도우미 함수 (ASCII 및 바이너리 DXF 모두 완벽 대응)
+# DXF 읽기 도우미 함수 (DXFStructureError 완벽 방지)
 # -------------------------------------------------------------------
 def load_dxf_doc(uploaded_file):
-    """Streamlit UploadedFile 데이터를 바이너리/ASCII 모든 형태에 맞춰 안전하게 파싱"""
-    bytes_data = uploaded_file.getvalue()
+    """UploadedFile의 raw bytes를 손상 없이 ezdxf로 로드"""
+    raw_bytes = uploaded_file.getvalue()
 
-    # 1차 시도: 바이너리 스트림 방식 (Binary DXF 대응)
+    # 1. BytesIO로 바이너리/ASCII 직접 로드 시도
     try:
-        return ezdxf.read(io.BytesIO(bytes_data))
+        return ezdxf.read(io.BytesIO(raw_bytes))
     except Exception:
         pass
 
-    # 2차 시도: utf-8 인코딩 텍스트 스트림
+    # 2. UTF-8 텍스트 스트림 시도
     try:
-        text = bytes_data.decode('utf-8', errors='replace')
-        return ezdxf.read(io.StringIO(text))
+        text_utf8 = raw_bytes.decode('utf-8', errors='replace')
+        return ezdxf.read(io.StringIO(text_utf8))
     except Exception:
         pass
 
-    # 3차 시도: euc-kr (한글 CAD 도면 인코딩 대응)
+    # 3. EUC-KR / CP949 (한국어 캐드 한글 레이어 대응)
     try:
-        text = bytes_data.decode('euc-kr', errors='ignore')
-        return ezdxf.read(io.StringIO(text))
+        text_euckr = raw_bytes.decode('euc-kr', errors='ignore')
+        return ezdxf.read(io.StringIO(text_euckr))
     except Exception:
         pass
 
-    # 4차 시도: latin-1 텍스트 스트림
-    text = bytes_data.decode('latin-1', errors='ignore')
-    return ezdxf.read(io.StringIO(text))
+    # 4. 최후의 수단: latin-1 (바이너리 안전)
+    text_latin = raw_bytes.decode('latin-1', errors='ignore')
+    return ezdxf.read(io.StringIO(text_latin))
 
 # -------------------------------------------------------------------
 # DXF 처리 함수
