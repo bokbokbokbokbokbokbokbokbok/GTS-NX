@@ -1,8 +1,2 @@
-streamlit
-folium
-streamlit-folium
-streamlit
-ezdxf
-matplotlib
-numpy
-scipy
+Plaintext
+openpyxl
