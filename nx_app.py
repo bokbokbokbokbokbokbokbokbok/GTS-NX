@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import ezdxf
+from ezdxf.recover import readfile_or_stream
 import io
 from shapely.geometry import LineString, Polygon
 
@@ -16,35 +17,34 @@ uploaded_dxf_building = st.sidebar.file_uploader("2. 건물 DXF 파일 업로드
 buffer_radius = st.sidebar.slider("선로 영향 반경 (m / 단위거리)", min_value=1.0, max_value=50.0, value=10.0, step=1.0)
 
 # -------------------------------------------------------------------
-# DXF 읽기 도우미 함수 (DXFStructureError 완벽 방지)
+# DXF 읽기 도우미 함수 (복구 로더 및 예외 처리 적용)
 # -------------------------------------------------------------------
 def load_dxf_doc(uploaded_file):
-    """UploadedFile의 raw bytes를 손상 없이 ezdxf로 로드"""
+    """손상되거나 인코딩이 비표준인 DXF도 ezdxf.recover 모듈로 복구하여 로드"""
     raw_bytes = uploaded_file.getvalue()
 
-    # 1. BytesIO로 바이너리/ASCII 직접 로드 시도
+    # 1. ezdxf 공식 복구 로더 사용 (가장 우수한 데이터 복원력)
     try:
-        return ezdxf.read(io.BytesIO(raw_bytes))
+        doc, auditor = readfile_or_stream(io.BytesIO(raw_bytes))
+        return doc
     except Exception:
         pass
 
-    # 2. UTF-8 텍스트 스트림 시도
-    try:
-        text_utf8 = raw_bytes.decode('utf-8', errors='replace')
-        return ezdxf.read(io.StringIO(text_utf8))
-    except Exception:
-        pass
-
-    # 3. EUC-KR / CP949 (한국어 캐드 한글 레이어 대응)
+    # 2. CP949 / EUC-KR (한국어 캐드 레이어 인코딩 강제 지정)
     try:
         text_euckr = raw_bytes.decode('euc-kr', errors='ignore')
         return ezdxf.read(io.StringIO(text_euckr))
     except Exception:
         pass
 
-    # 4. 최후의 수단: latin-1 (바이너리 안전)
-    text_latin = raw_bytes.decode('latin-1', errors='ignore')
-    return ezdxf.read(io.StringIO(text_latin))
+    # 3. UTF-8
+    try:
+        text_utf8 = raw_bytes.decode('utf-8', errors='ignore')
+        return ezdxf.read(io.StringIO(text_utf8))
+    except Exception:
+        pass
+
+    return None
 
 # -------------------------------------------------------------------
 # DXF 처리 함수
@@ -53,6 +53,10 @@ def load_dxf_doc(uploaded_file):
 # 1. 선로 DXF 처리 (선로 추출 및 버퍼 연산)
 def process_route_dxf(file, buffer_dist):
     doc = load_dxf_doc(file)
+    if doc is None:
+        st.error("❌ 선로 DXF 파일을 읽을 수 없습니다. 파일 형식이나 인코딩을 확인해 주세요.")
+        return []
+        
     msp = doc.modelspace()
     routes = []
     
@@ -91,6 +95,10 @@ def process_route_dxf(file, buffer_dist):
 # 2. 건물 DXF 처리 (건물 추출 및 중심점/연번 연산)
 def process_building_dxf(file):
     doc = load_dxf_doc(file)
+    if doc is None:
+        st.error("❌ 건물 DXF 파일을 읽을 수 없습니다. 파일 형식이나 인코딩을 확인해 주세요.")
+        return []
+
     msp = doc.modelspace()
     buildings = []
     
