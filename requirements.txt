@@ -1,7 +1,6 @@
 streamlit
-ezdxf
 pandas
-plotly
-shapely
 openpyxl
-pyproj
+ezdxf
+folium
+streamlit-folium
