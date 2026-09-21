@@ -9,7 +9,7 @@ import shapely.geometry as sg
 import shapely.ops as so
 import folium
 from streamlit_folium import st_folium
-import requests  # 실시간 건물 데이터 API 호출용
+import requests
 
 st.set_page_config(page_title="자동 연도변조사 시스템", layout="wide", page_icon="🏗️")
 
@@ -53,7 +53,7 @@ with st.sidebar:
 
 # 메인 화면 영역
 if run_button:
-    with st.spinner(f"선형 추출 및 반경 {buffer_radius}m 내 실제 건물 검색 중... (수십 초 소요될 수 있습니다)"):
+    with st.spinner(f"선형 추출 및 반경 {buffer_radius}m 내 실제 건물 검색 중... (약 10~30초 소요)"):
         
         msp = doc.modelspace()
         lines_in_proj = []
@@ -87,59 +87,84 @@ if run_button:
         buffer_poly_wgs84 = so.transform(project_to_wgs84, buffer_poly)
         center_lon, center_lat = buffer_poly_wgs84.centroid.coords[0]
         
-        # 3. OpenStreetMap API를 통한 반경 내 실제 건물 추출
+        # 3. OpenStreetMap API를 통한 반경 내 실제 건물 추출 (단일+복합 다각형 모두 지원)
         min_lon, min_lat, max_lon, max_lat = buffer_poly_wgs84.bounds
         overpass_url = "http://overpass-api.de/api/interpreter"
-        # Bounding Box 내의 모든 건물(way) 검색
+        
         overpass_query = f"""
-        [out:json];
+        [out:json][timeout:25];
         (
           way["building"]({min_lat},{min_lon},{max_lat},{max_lon});
+          relation["building"]({min_lat},{min_lon},{max_lat},{max_lon});
         );
         out geom;
         """
         
         bldg_data = []
         try:
-            response = requests.get(overpass_url, params={'data': overpass_query})
-            osm_data = response.json()
+            # API 봇 차단을 방지하기 위한 User-Agent 헤더 추가
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+            response = requests.get(overpass_url, params={'data': overpass_query}, headers=headers, timeout=30)
             
-            bldg_id = 1
-            for element in osm_data.get('elements', []):
-                if element['type'] == 'way':
-                    # 건물 폴리곤(외곽선) 좌표 생성
-                    coords = [(node['lon'], node['lat']) for node in element.get('geometry', [])]
-                    if len(coords) >= 3:
-                        bldg_poly = sg.Polygon(coords)
+            if response.status_code == 200:
+                osm_data = response.json()
+                bldg_id = 1
+                
+                for element in osm_data.get('elements', []):
+                    coords = []
+                    tags = element.get('tags', {})
+                    
+                    # 일반 단일 건물 (way) 처리
+                    if element['type'] == 'way':
+                        coords = [(node['lon'], node['lat']) for node in element.get('geometry', [])]
                         
-                        # 핵심: 건물이 생성한 반경(buffer_poly_wgs84)에 걸쳐있거나(intersects) 포함되는지 검사
-                        if bldg_poly.intersects(buffer_poly_wgs84):
-                            center = bldg_poly.centroid
-                            tags = element.get('tags', {})
-                            name = tags.get('name', '명칭없음')
-                            addr = tags.get('addr:street', '') + " " + tags.get('addr:housenumber', '')
-                            if addr.strip() == "":
-                                addr = "주소정보 없음"
+                    # 대형 아파트 단지 등 복합 폴리곤 (relation) 처리
+                    elif element['type'] == 'relation':
+                        for member in element.get('members', []):
+                            if member.get('role') == 'outer' and 'geometry' in member:
+                                coords.extend([(node['lon'], node['lat']) for node in member['geometry']])
+                    
+                    if len(coords) >= 3:
+                        try:
+                            # 핵심: 복잡한 아파트 형태의 꼬임 에러 방지를 위해 Convex Hull(볼록 껍질) 생성
+                            bldg_poly = sg.MultiPoint(coords).convex_hull
+                            
+                            # 생성된 건물이 반경 다각형에 1mm라도 걸쳐있는지(intersects) 확인
+                            if bldg_poly.intersects(buffer_poly_wgs84):
+                                center = bldg_poly.centroid
+                                name = tags.get('name', '명칭없음 (도면확인 필요)')
+                                addr = (tags.get('addr:street', '') + " " + tags.get('addr:housenumber', '')).strip()
+                                if not addr:
+                                    addr = "주소정보 없음"
+                                    
+                                visual_coords = list(bldg_poly.exterior.coords)
                                 
-                            bldg_data.append({
-                                "id": bldg_id,
-                                "lat": center.y,
-                                "lon": center.x,
-                                "name": name,
-                                "addr": addr.strip(),
-                                "polygon": coords # 시각화를 위한 외곽선 저장
-                            })
-                            bldg_id += 1
+                                bldg_data.append({
+                                    "id": bldg_id,
+                                    "lat": center.y,
+                                    "lon": center.x,
+                                    "name": name,
+                                    "addr": addr,
+                                    "polygon": visual_coords
+                                })
+                                bldg_id += 1
+                        except Exception:
+                            pass # 형상이 완전히 깨진 예외적 쓰레기 데이터는 건너뜀
+            else:
+                st.error(f"지도 API 서버 응답 오류가 발생했습니다. (상태 코드: {response.status_code})")
         except Exception as e:
-            st.warning(f"건물 데이터를 불러오는데 실패했습니다: {e}")
+            st.warning(f"인터넷 연결 문제 또는 API 서버 통신 오류로 건물을 불러오지 못했습니다: {e}")
 
-        st.success(f"공간분석 완료! 반경 내 걸쳐있는 실제 건물 총 {len(bldg_data)}동을 찾았습니다.")
+        if len(bldg_data) > 0:
+            st.success(f"공간분석 완료! 반경 내 걸쳐있는 실제 건물 총 {len(bldg_data)}동을 찾았습니다.")
+        else:
+            st.warning("분석은 완료되었으나, 해당 영역 내 오픈스트리트맵 상에 맵핑된 건물 정보가 없습니다.")
         
         # ---------------------------------------------------------
         # 4. 지도 시각화
         # ---------------------------------------------------------
         st.subheader("🗺️ 공간 분석 결과 (실제 걸쳐있는 건물 추출)")
-        m = folium.Map(location=[center_lat, center_lon], zoom_start=16, tiles="OpenStreetMap")
+        m = folium.Map(location=[center_lat, center_lon], zoom_start=17, tiles="OpenStreetMap")
         
         # 반경 다각형
         folium.GeoJson(
@@ -153,15 +178,13 @@ if run_button:
             style_function=lambda x: {'color': 'red', 'weight': 3}
         ).add_to(m)
         
-        # 추출된 실제 건물 외곽선 및 연번 마커 표시
+        # 추출된 건물 노란색 외곽선 및 연번 마커 표시
         for bldg in bldg_data:
-            # 건물 실제 형상(외곽선) 그리기
             folium.Polygon(
                 locations=[(lat, lon) for lon, lat in bldg['polygon']],
                 color='black', weight=1, fillColor='yellow', fillOpacity=0.6
             ).add_to(m)
             
-            # 중심에 연번 마커 추가
             popup_html = f"<b>연번: {bldg['id']}</b><br>명칭: {bldg['name']}<br>주소: {bldg['addr']}"
             number_icon = folium.DivIcon(html=f"""
                 <div style="
