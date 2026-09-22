@@ -16,8 +16,7 @@ if "lon" not in st.session_state:
 if "zoom" not in st.session_state:
     st.session_state.zoom = 11
 
-# 2. 샘플 데이터 (실제 사용하시는 데이터프레임으로 대체하시면 됩니다)
-# 예: df = pd.read_csv("your_data.csv") 형태
+# 2. 샘플 데이터 (실제 사용하시는 데이터프레임으로 대체 가능)
 @st.cache_data
 def load_data():
     return pd.DataFrame({
@@ -56,7 +55,7 @@ with col1:
         st.session_state.lon = float(selected_row["lon"])
         st.session_state.zoom = 15  # 클릭 시 확대될 줌 레벨
         
-        st.success(과정: f"선택됨 -> {selected_row['지점명']} (위도: {st.session_state.lat}, 경도: {st.session_state.lon})")
+        st.success(f"선택됨 -> {selected_row['지점명']} (위도: {st.session_state.lat}, 경도: {st.session_state.lon})")
         st.rerun()
 
 with col2:
