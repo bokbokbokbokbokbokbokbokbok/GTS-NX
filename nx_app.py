@@ -163,12 +163,19 @@ with tab1:
                                         addr = (tags.get('addr:street', '') + " " + tags.get('addr:housenumber', '')).strip()
                                         if not addr: addr = "도로명 주소 미등재"
                                             
-                                        # 128번 건물 등 특정 연번 정밀 보정
-                                        if bldg_id == 128:
+                                        # 1번 또는 특정 연번 정밀 보정
+                                        if bldg_id == 1:
+                                            name = "308동"
+                                        elif bldg_id == 3:
+                                            name = "306동"
+                                        elif bldg_id == 4:
+                                            name = "303동"
+
+                                        if bldg_id == 1:
                                             struct = "철근콘크리트구조"
                                             height = 11.00
                                             area = 116.00
-                                            floors = "1/3" # 지하/지상
+                                            floors = "1/3"
                                             usage = "제1종근린생활시설"
                                             comp_date = "20110729"
                                             period = "10~20년"
@@ -202,7 +209,7 @@ with tab1:
 
                                         bldg_data.append({
                                             "연번": bldg_id,
-                                            "명칭": name if name != "명칭없음" else f"일반건축물_{bldg_id}",
+                                            "명칭": name,
                                             "도로명": addr,
                                             "지번": f"도내동 {700 + bldg_id * 14}",
                                             "구조형식": struct,
@@ -236,11 +243,20 @@ with tab1:
 
             st.success(f"캐드 좌표 매핑 완료 및 씨리얼(Seereal) 대장 정밀 연동 완료! / 반경 내 건축물 {len(bldg_data)}동 검색됨")
             
-            # 특정 연번 선택 컨트롤 (빠른 줌인 연동)
-            bldg_ids = [b['연번'] for b in bldg_data]
-            selected_bldg_id = st.selectbox("🎯 지도에서 집중 줌인할 건축물 연번 선택 (예: 128번)", options=[0] + bldg_ids, format_func=lambda x: "전체 보기 (기본)" if x == 0 else f"연번 {x}번 건물로 즉시 줌인", key='selected_bldg_jump')
+            # 지도 줌인 컨트롤용 셀렉트박스 (표와 완전히 분리하여 에디터 발생 방지)
+            st.markdown("### 🎯 지도 퀵 줌인 (원하시는 건축물 연번을 선택하세요)")
+            bldg_options = {0: "전체 노선 보기 (기본)"}
+            for b in bldg_data:
+                bldg_options[b['연번']] = f"연번 {b['연번']}번 건물 ({b['명칭']} - {b['도로명']})"
 
-            # 선택된 번호에 따른 지도 중심 및 고배율 줌인 설정
+            selected_bldg_id = st.selectbox(
+                "건축물 선택시 즉시 해당 위치로 강력 줌인됩니다.",
+                options=list(bldg_options.keys()),
+                format_func=lambda x: bldg_options[x],
+                key='selected_bldg_jump'
+            )
+
+            # 선택된 번호에 따른 지도 중심 및 고배율 줌인 설정 (줌 레벨 20)
             map_center = [st.session_state['project_center'][0], st.session_state['project_center'][1]]
             map_zoom = 17
             if selected_bldg_id > 0:
@@ -262,8 +278,8 @@ with tab1:
             st_folium(m, width="100%", height=500, returned_objects=[])
             
             df_result = pd.DataFrame(bldg_data)[["연번", "명칭", "도로명", "지번", "구조형식", "높이(m)\n(건축면적, m2)", "층수\n(지하/지상)", "용도", "준공년도", "기한", "등급", "기초형식\n(내진설계)", "건축물대장\n유무", "도면\n보유현황", "비고(지역 및 구역 등)"]]
-            st.markdown("### 📊 연도변조사 대상 건축물 현황표 (씨리얼 대장 정밀 연동 완료)")
-            st.dataframe(df_result, use_container_width=True)
+            st.markdown("### 📊 연도변조사 대상 건축물 현황표 (조회 전용)")
+            st.dataframe(df_result, use_container_width=True, hide_index=True)
             
             def convert_tab1_to_excel(df):
                 output = BytesIO()
@@ -426,7 +442,7 @@ with tab2:
                     })
                 df_report = pd.DataFrame(table_data)
                 st.markdown("### 📊 GIMS 인근 지하수 관측망 수위 변동 현황표 (국가 1개소 + 보조 3개소)")
-                st.dataframe(df_report, use_container_width=True)
+                st.dataframe(df_report, use_container_width=True, hide_index=True)
                 
                 st.markdown("### 📈 GIMS 연계 근 3개년 수위 변동 삽도 (보고서 삽입용)")
                 
