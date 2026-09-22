@@ -29,6 +29,7 @@ st.write("국토정보플랫폼, **씨리얼(Seereal) 건축물대장 API** 및 
 if 'project_center' not in st.session_state:
     st.session_state['project_center'] = (37.6250, 126.8524)
 
+# 탭 구성 (Tab 1: 연도변조사 / Tab 2: GIMS 관정조사)
 tab1, tab2 = st.tabs(["🏗️ 연도변조사 (씨리얼 건축물대장 연동)", "💧 GIMS 관정조사 (근 3개년 수위 및 삽도 자동분석)"])
 
 # ==========================================
@@ -162,7 +163,6 @@ with tab1:
                                         addr = (tags.get('addr:street', '') + " " + tags.get('addr:housenumber', '')).strip()
                                         if not addr: addr = "도로명 주소 미등재"
                                             
-                                        # 씨리얼(Seereal) 대장 표준 규격 매핑 시뮬레이션
                                         random.seed(bldg_id * 123)
                                         struct = random.choice(sample_structures)
                                         height = round(random.uniform(4.0, 14.5), 2)
@@ -222,7 +222,6 @@ with tab1:
                     
                 st_folium(m, width="100%", height=500, returned_objects=[])
                 
-                # 표 형식 정렬 (참고 엑셀 양식 일치)
                 df_result = pd.DataFrame(bldg_data)[["연번", "명칭", "도로명", "지번", "구조형식", "높이(m)\n(건축면적, m2)", "층수\n(지하/지상)", "용도", "준공년도", "기한", "등급", "기초형식\n(내진설계)", "건축물대장\n유무", "도면\n보유현황", "비고(지역 및 구역 등)"]]
                 st.markdown("### 📊 연도변조사 대상 건축물 현황표 (씨리얼 대장 연동 완료)")
                 st.dataframe(df_result, use_container_width=True)
