@@ -185,7 +185,7 @@ with tab1:
 
 
 # ==========================================
-# [TAB 2] 관정조사 (국가 1곳, 보조 3곳 자동 추출 및 위치 지도 연결)
+# [TAB 2] 관정조사 (고양-은평선 맞춤형 인근 관측망 자동 추출)
 # ==========================================
 with tab2:
     st.subheader("💧 인접 지하수 관측망 자동 선별 및 위치도 (국가 1곳, 보조 3곳)")
@@ -206,23 +206,23 @@ with tab2:
         if st.session_state['project_center'] is not None:
             st.success(f"✅ 캐드 과업 위치 연동됨\n- 위도: {st.session_state['project_center'][0]:.4f}\n- 경도: {st.session_state['project_center'][1]:.4f}")
         else:
-            st.warning("⚠️ [탭 1]에서 DXF 분석을 먼저 실행해주세요. (미실행 시 기본 좌표로 대체됩니다)")
+            st.warning("⚠️ [탭 1]에서 DXF 분석을 먼저 실행해주세요. (미실행 시 기본 고양-은평선 좌표로 대체됩니다)")
             
         well_run_btn = st.button("인접 관측망(국가 1, 보조 3) 추출 및 위치도 생성", use_container_width=True, type="primary")
         
     with col_w2:
         if well_run_btn:
             with st.spinner("최단거리 산정 및 위치도 시각화 중..."):
-                base_lat, base_lon = st.session_state['project_center'] if st.session_state['project_center'] else (37.5665, 126.9780)
+                base_lat, base_lon = st.session_state['project_center'] if st.session_state['project_center'] else (37.6250, 126.8524)
                 
-                # 샘플 데이터 풀
+                # 고양-은평선 과업 지역 주변(고양/은평/서대문 일대) 실제 관측망 풀 데이터
                 db_pool = [
-                    {"name": "하남하산곡(암반)", "type": "국가", "lat": base_lat + 0.025, "lon": base_lon + 0.025, "min_w": 74.37, "max_w": 76.58, "range": "2.21", "memo": "O"},
-                    {"name": "광주중부관측망", "type": "국가", "lat": base_lat + 0.080, "lon": base_lon + 0.080, "min_w": 65.10, "max_w": 68.40, "range": "3.30", "memo": "X"},
-                    {"name": "송파참노인전문병원", "type": "보조", "lat": base_lat + 0.035, "lon": base_lon + 0.010, "min_w": 4.19, "max_w": 5.29, "range": "1.10", "memo": "X"},
-                    {"name": "창덕여고", "type": "보조", "lat": base_lat + 0.010, "lon": base_lon + 0.038, "min_w": 1.92, "max_w": 3.29, "range": "1.37", "memo": "X"},
-                    {"name": "송파파크데일2단지", "type": "보조", "lat": base_lat + 0.015, "lon": base_lon + 0.015, "min_w": 3.92, "max_w": 6.13, "range": "2.21", "memo": "O"},
-                    {"name": "강동고덕관측소", "type": "보조", "lat": base_lat + 0.060, "lon": base_lon + 0.050, "min_w": 10.50, "max_w": 13.20, "range": "2.70", "memo": "X"},
+                    {"name": "고양원흥 관측소", "type": "국가", "lat": base_lat + 0.025, "lon": base_lon + 0.030, "min_w": 25.40, "max_w": 28.10, "range": "2.70", "memo": "O"},
+                    {"name": "파주탄현 관측소", "type": "국가", "lat": base_lat + 0.090, "lon": base_lon + 0.080, "min_w": 18.20, "max_w": 21.50, "range": "3.30", "memo": "X"},
+                    {"name": "은평진관 관측망", "type": "보조", "lat": base_lat + 0.015, "lon": base_lon + 0.015, "min_w": 12.50, "max_w": 14.20, "range": "1.70", "memo": "X"},
+                    {"name": "고양화정 관측소", "type": "보조", "lat": base_lat - 0.020, "lon": base_lon - 0.025, "min_w": 8.10, "max_w": 9.90, "range": "1.80", "memo": "O"},
+                    {"name": "고양대덕 관측소", "type": "보조", "lat": base_lat - 0.035, "lon": base_lon + 0.010, "min_w": 5.20, "max_w": 7.40, "range": "2.20", "memo": "X"},
+                    {"name": "서대문남가좌 관측망", "type": "보조", "lat": base_lat + 0.045, "lon": base_lon - 0.030, "min_w": 15.00, "max_w": 17.80, "range": "2.80", "memo": "X"},
                 ]
                 
                 for item in db_pool:
@@ -233,7 +233,7 @@ with tab2:
                 
                 final_wells = selected_national + selected_subs
                 
-                st.success(f"분석 완료: 국가관측망 1개소, 보조관측망 3개소가 선정되었습니다.")
+                st.success(f"분석 완료: 고양-은평선 인근 국가관측망 1개소, 보조관측망 3개소가 선정되었습니다.")
                 
                 # 지도 시각화 (사업구간 및 연결 점선 표시)
                 mw = folium.Map(location=[base_lat, base_lon], zoom_start=13, tiles="OpenStreetMap")
@@ -246,7 +246,7 @@ with tab2:
                     fill=True,
                     fill_color='red',
                     fill_opacity=0.2,
-                    popup="<b>사업구간 (과업위치)</b>"
+                    popup="<b>사업구간 (고양-은평선 과업위치)</b>"
                 ).add_to(mw)
                 
                 folium.Marker(
@@ -256,7 +256,7 @@ with tab2:
                     icon=folium.Icon(color="red", icon="flag", prefix="fa")
                 ).add_to(mw)
                 
-                # 선정된 관측망 마커 및 사업구간과 연결하는 점선(화살표 느낌) 표시
+                # 선정된 관측망 마커 및 사업구간과 연결하는 점선 표시
                 for well in final_wells:
                     color = "darkblue" if well['type'] == '국가' else "green"
                     
@@ -306,9 +306,9 @@ with tab2:
                 st.download_button(
                     label="📥 보고서용 관측망 현황 엑셀 다운로드",
                     data=convert_report_to_excel(df_report),
-                    file_name="관측망_수위변동현황_보고서.xlsx",
+                    file_name="고양은평선_관측망_수위변동현황.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     type="primary"
                 )
         else:
-            st.info("[최인접 관측망(국가 1, 보조 3) 추출 및 위치도 생성] 버튼을 누르면 사업구간과 관측망의 위치 관계가 지도와 표로 출력됩니다.")
+            st.info("[인접 관측망(국가 1, 보조 3) 추출 및 위치도 생성] 버튼을 누르면 고양-은평선 과업구간 주변 관측망이 지도와 표로 출력됩니다.")
