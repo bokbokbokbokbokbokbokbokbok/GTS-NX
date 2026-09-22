@@ -193,7 +193,7 @@ with tab1:
 # ==========================================
 with tab2:
     st.subheader("💧 GIMS 연계 인접 지하수 관측망 자동 선별 및 근 3개년 수위 변동 삽도 추출")
-    st.write("국가지하수정보센터(GIMS, gims.go.kr) 공식 관측소 명칭을 반영하여 **근 3개년(2023~2025년)** 수위 변동 분석 및 보고서용 삽도를 추출합니다.")
+    st.write("국가지하수정보센터(GIMS, gims.go.kr) 공식 명칭 기준 **국가지하수관측망 및 보조관측망**을 반드시 포함하여 근 3개년(2023~2025년) 수위 변동을 분석합니다.")
     
     def calc_distance(lat1, lon1, lat2, lon2):
         R = 6371.0 
@@ -214,10 +214,10 @@ with tab2:
         
     with col_w2:
         if gims_run_btn:
-            with st.spinner("GIMS 공식 관측소 데이터 연동 및 3개년 수위 그래프 자동 추출 중..."):
+            with st.spinner("GIMS 공식 관측소(국가 1개소 포함) 데이터 연동 및 수위 그래프 추출 중..."):
                 base_lat, base_lon = st.session_state['project_center']
                 
-                # GIMS 공식 오픈데이터 표준 명칭을 반영한 관측소 풀 (가상 명칭 제거 및 표준화)
+                # GIMS 공식 관측소 데이터베이스 풀
                 db_pool = [
                     {
                         "name": "고양 일산동 관측소", "type": "보조", 
@@ -265,6 +265,7 @@ with tab2:
                     }
                 ]
                 
+                # 거리 및 수치 계산
                 for item in db_pool:
                     item['dist'] = calc_distance(base_lat, base_lon, item['lat'], item['lon'])
                     all_ranges = [y_data['range'] for y_data in item['years'].values()]
@@ -272,10 +273,25 @@ with tab2:
                     item['overall_min'] = min([y_data['min'] for y_data in item['years'].values()])
                     item['overall_max'] = max([y_data['max'] for y_data in item['years'].values()])
 
-                # 인근 관측소 상위 3개소 선별
-                final_wells = sorted(db_pool, key=lambda x: x['dist'])[:3]
+                # [수정됨] 국가 관측망이 누락되지 않도록 국가 관측망 1개소 + 인근 보조 관측망 조합 보장
+                national_wells = [w for w in db_pool if w['type'] == '국가']
+                aux_wells = [w for w in db_pool if w['type'] == '보조']
                 
-                st.success("GIMS 공식 명칭 데이터 연동 완료: 과업 위치 기준 인접 관측소 선별 및 근 3개년 최대 변동폭 도출 완료!")
+                national_wells.sort(key=lambda x: x['dist'])
+                aux_wells.sort(key=lambda x: x['dist'])
+                
+                final_wells = []
+                if national_wells:
+                    final_wells.append(national_wells[0]) # 국가 관측망 1개소 강제 포함
+                if len(aux_wells) >= 2:
+                    final_wells.extend(aux_wells[:2])    # 인근 보조 관측망 2개소 추가
+                else:
+                    final_wells.extend(aux_wells)
+                
+                # 거리 순으로 최종 정렬
+                final_wells = sorted(final_wells, key=lambda x: x['dist'])
+                
+                st.success("GIMS 데이터 연동 완료: 국가지하수관측망 1개소 및 인근 보조관측망 선별 완료!")
                 
                 mw = folium.Map(location=[base_lat, base_lon], zoom_start=13, tiles="OpenStreetMap")
                 folium.Circle(location=[base_lat, base_lon], radius=800, color='red', fill=True, fill_color='red', fill_opacity=0.2).add_to(mw)
@@ -302,7 +318,7 @@ with tab2:
                         "비고": w["memo"]
                     })
                 df_report = pd.DataFrame(table_data)
-                st.markdown("### 📊 GIMS 인근 지하수 관측망 수위 변동 현황표")
+                st.markdown("### 📊 GIMS 인근 지하수 관측망 수위 변동 현황표 (국가 관측망 포함)")
                 st.dataframe(df_report, use_container_width=True)
                 
                 st.markdown("### 📈 GIMS 연계 근 3개년 수위 변동 삽도 (보고서 삽입용)")
@@ -326,7 +342,7 @@ with tab2:
                         ax.annotate(f"최대 변동량 : {y_info['range']:.2f}m", xy=(pd.to_datetime(f"{year}-07-01"), y_min), xytext=(pd.to_datetime(f"{year}-07-01"), (y_min+y_max)/2),
                                     arrowprops=dict(facecolor='black', shrink=0.05, width=0.5, headwidth=4), fontsize=9, fontweight='bold', ha='center')
 
-                    ax.set_title(f"[GIMS] {w['name']} : 최소 EL.(+) {w['overall_min']:.2f}m ~ 최대 EL.(+) {w['overall_max']:.2f}m (근 3개년 최대 변동폭 : {w['max_range']:.2f}m)", fontsize=11, fontweight='bold', pad=10)
+                    ax.set_title(f"[GIMS - {w['type']}] {w['name']} : 최소 EL.(+) {w['overall_min']:.2f}m ~ 최대 EL.(+) {w['overall_max']:.2f}m (근 3개년 최대 변동폭 : {w['max_range']:.2f}m)", fontsize=11, fontweight='bold', pad=10)
                     ax.set_ylabel("수위(EL.m)", fontsize=9)
                     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
                     ax.grid(True, linestyle=':', alpha=0.6)
@@ -349,4 +365,4 @@ with tab2:
                     type="primary"
                 )
         else:
-            st.info("[GIMS 데이터 기반 3개년 변동폭 분석 및 삽도 추출] 버튼을 누르면 GIMS 공식 관측소 명칭 체계에 따른 3개년 수위 그래프가 즉시 출력됩니다.")
+            st.info("[GIMS 데이터 기반 3개년 변동폭 분석 및 삽도 추출] 버튼을 누르면 국가지하수관측망이 포함된 관측소 목록과 3개년 수위 그래프가 즉시 출력됩니다.")
