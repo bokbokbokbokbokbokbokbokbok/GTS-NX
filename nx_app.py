@@ -136,7 +136,8 @@ with tab1:
                                 coords = [(node['lon'], node['lat']) for node in element.get('geometry', [])]
                             elif element['type'] == 'relation':
                                 for member in element.get('members', []):
-                                    if member.get('role'] == 'outer' and 'geometry' in member:
+                                    # 오류 수정된 부분: member.get('role') == 'outer'
+                                    if member.get('role') == 'outer' and 'geometry' in member:
                                         coords.extend([(node['lon'], node['lat']) for node in member['geometry']])
                             
                             if len(coords) >= 3:
@@ -211,7 +212,6 @@ with tab2:
             with st.spinner("최단거리 산정 및 위치도 시각화 중..."):
                 base_lat, base_lon = st.session_state['project_center']
                 
-                # 도면 실제 위치 기준 인접 관측망 시뮬레이션 풀
                 db_pool = [
                     {"name": "지역 1 국가관측소", "type": "국가", "lat": base_lat + 0.018, "lon": base_lon + 0.022, "min_w": 22.40, "max_w": 25.10, "range": "2.70", "memo": "O"},
                     {"name": "지역 2 국가관측소", "type": "국가", "lat": base_lat + 0.075, "lon": base_lon + 0.065, "min_w": 18.20, "max_w": 21.50, "range": "3.30", "memo": "X"},
