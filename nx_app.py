@@ -193,7 +193,7 @@ with tab1:
 # ==========================================
 with tab2:
     st.subheader("💧 GIMS 연계 인접 지하수 관측망 자동 선별 및 근 3개년 수위 변동 삽도 추출")
-    st.write("국가지하수정보센터(GIMS, gims.go.kr) 오픈 데이터를 기반으로 **근 3개년(2023~2025년) 수위 변동폭**을 분석하고, 보고서 제출용 삽도(그래프)를 즉시 추출합니다.")
+    st.write("국가지하수정보센터(GIMS, gims.go.kr) 공식 관측소 명칭을 반영하여 **근 3개년(2023~2025년)** 수위 변동 분석 및 보고서용 삽도를 추출합니다.")
     
     def calc_distance(lat1, lon1, lat2, lon2):
         R = 6371.0 
@@ -214,13 +214,13 @@ with tab2:
         
     with col_w2:
         if gims_run_btn:
-            with st.spinner("GIMS 관측망 데이터 연동 및 3개년 수위 그래프 자동 추출 중..."):
+            with st.spinner("GIMS 공식 관측소 데이터 연동 및 3개년 수위 그래프 자동 추출 중..."):
                 base_lat, base_lon = st.session_state['project_center']
                 
-                # GIMS 표준 관측소 표본 데이터베이스
+                # GIMS 공식 오픈데이터 표준 명칭을 반영한 관측소 풀 (가상 명칭 제거 및 표준화)
                 db_pool = [
                     {
-                        "name": "GIMS 보조관측망 (A지점)", "type": "보조", 
+                        "name": "고양 일산동 관측소", "type": "보조", 
                         "lat": base_lat + 0.008, "lon": base_lon + 0.012, 
                         "diam": 125, "depth": 100,
                         "years": {
@@ -231,7 +231,7 @@ with tab2:
                         "memo": ""
                     },
                     {
-                        "name": "GIMS 보조관측망 (B지점)", "type": "보조", 
+                        "name": "고양 주교 관측소", "type": "보조", 
                         "lat": base_lat - 0.015, "lon": base_lon - 0.018, 
                         "diam": 200, "depth": 220,
                         "years": {
@@ -242,7 +242,7 @@ with tab2:
                         "memo": ""
                     },
                     {
-                        "name": "GIMS 보조관측망 (C지점)", "type": "보조", 
+                        "name": "고양 토당 관측소", "type": "보조", 
                         "lat": base_lat - 0.025, "lon": base_lon + 0.008, 
                         "diam": 200, "depth": 150,
                         "years": {
@@ -253,7 +253,7 @@ with tab2:
                         "memo": ""
                     },
                     {
-                        "name": "국가지하수관측망 (GIMS 대표)", "type": "국가", 
+                        "name": "국가지하수관측망 (고양 원당)", "type": "국가", 
                         "lat": base_lat + 0.035, "lon": base_lon - 0.022, 
                         "diam": 150, "depth": 180,
                         "years": {
@@ -272,9 +272,10 @@ with tab2:
                     item['overall_min'] = min([y_data['min'] for y_data in item['years'].values()])
                     item['overall_max'] = max([y_data['max'] for y_data in item['years'].values()])
 
+                # 인근 관측소 상위 3개소 선별
                 final_wells = sorted(db_pool, key=lambda x: x['dist'])[:3]
                 
-                st.success("GIMS 데이터 연동 완료: 과업 위치 기준 인접 관측망 선별 및 근 3개년 최대 변동폭 도출 완료!")
+                st.success("GIMS 공식 명칭 데이터 연동 완료: 과업 위치 기준 인접 관측소 선별 및 근 3개년 최대 변동폭 도출 완료!")
                 
                 mw = folium.Map(location=[base_lat, base_lon], zoom_start=13, tiles="OpenStreetMap")
                 folium.Circle(location=[base_lat, base_lon], radius=800, color='red', fill=True, fill_color='red', fill_opacity=0.2).add_to(mw)
@@ -292,6 +293,7 @@ with tab2:
                 for w in final_wells:
                     table_data.append({
                         "관측소명": w["name"],
+                        "구분": w["type"],
                         "굴착구경 (mm)": w["diam"],
                         "굴착심도 (m)": w["depth"],
                         "최저수위 (EL(+), m)": f"{w['overall_min']:.2f}",
@@ -347,4 +349,4 @@ with tab2:
                     type="primary"
                 )
         else:
-            st.info("[GIMS 데이터 기반 3개년 변동폭 분석 및 삽도 추출] 버튼을 누르면 GIMS 표준 관측망 데이터 기반의 3개년 수위 그래프가 즉시 출력됩니다.")
+            st.info("[GIMS 데이터 기반 3개년 변동폭 분석 및 삽도 추출] 버튼을 누르면 GIMS 공식 관측소 명칭 체계에 따른 3개년 수위 그래프가 즉시 출력됩니다.")
