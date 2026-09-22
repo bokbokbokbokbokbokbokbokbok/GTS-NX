@@ -163,13 +163,12 @@ with tab1:
                                         addr = (tags.get('addr:street', '') + " " + tags.get('addr:housenumber', '')).strip()
                                         if not addr: addr = "도로명 주소 미등재"
                                             
-                                        # 1번 또는 특정 연번 정밀 보정
-                                        if bldg_id == 1:
-                                            name = "308동"
-                                        elif bldg_id == 3:
-                                            name = "306동"
-                                        elif bldg_id == 4:
-                                            name = "303동"
+                                        if bldg_id == 1: name = "308동"
+                                        elif bldg_id == 2: name = "307동"
+                                        elif bldg_id == 3: name = "306동"
+                                        elif bldg_id == 4: name = "303동"
+                                        elif bldg_id == 5: name = "302동"
+                                        elif bldg_id == 6: name = "301동"
 
                                         if bldg_id == 1:
                                             struct = "철근콘크리트구조"
@@ -243,14 +242,14 @@ with tab1:
 
             st.success(f"캐드 좌표 매핑 완료 및 씨리얼(Seereal) 대장 정밀 연동 완료! / 반경 내 건축물 {len(bldg_data)}동 검색됨")
             
-            # 지도 줌인 컨트롤용 셀렉트박스 (표와 완전히 분리하여 에디터 발생 방지)
+            # [핵심] 지도 퀵 줌인 전용 셀렉트박스 (에디터 발생 원천 차단)
             st.markdown("### 🎯 지도 퀵 줌인 (원하시는 건축물 연번을 선택하세요)")
             bldg_options = {0: "전체 노선 보기 (기본)"}
             for b in bldg_data:
                 bldg_options[b['연번']] = f"연번 {b['연번']}번 건물 ({b['명칭']} - {b['도로명']})"
 
             selected_bldg_id = st.selectbox(
-                "건축물 선택시 즉시 해당 위치로 강력 줌인됩니다.",
+                "건축물 번호를 선택하시면 지도가 즉시 해당 위치로 확대(줌인)됩니다.",
                 options=list(bldg_options.keys()),
                 format_func=lambda x: bldg_options[x],
                 key='selected_bldg_jump'
@@ -278,8 +277,10 @@ with tab1:
             st_folium(m, width="100%", height=500, returned_objects=[])
             
             df_result = pd.DataFrame(bldg_data)[["연번", "명칭", "도로명", "지번", "구조형식", "높이(m)\n(건축면적, m2)", "층수\n(지하/지상)", "용도", "준공년도", "기한", "등급", "기초형식\n(내진설계)", "건축물대장\n유무", "도면\n보유현황", "비고(지역 및 구역 등)"]]
-            st.markdown("### 📊 연도변조사 대상 건축물 현황표 (조회 전용)")
-            st.dataframe(df_result, use_container_width=True, hide_index=True)
+            st.markdown("### 📊 연도변조사 대상 건축물 현황표 (수정 불가 완벽 조회 전용)")
+            
+            # [핵심] 텍스트 상자/에디터가 절대 뜨지 않는 st.table로 완전 교체
+            st.table(df_result)
             
             def convert_tab1_to_excel(df):
                 output = BytesIO()
@@ -442,7 +443,7 @@ with tab2:
                     })
                 df_report = pd.DataFrame(table_data)
                 st.markdown("### 📊 GIMS 인근 지하수 관측망 수위 변동 현황표 (국가 1개소 + 보조 3개소)")
-                st.dataframe(df_report, use_container_width=True, hide_index=True)
+                st.table(df_report)
                 
                 st.markdown("### 📈 GIMS 연계 근 3개년 수위 변동 삽도 (보고서 삽입용)")
                 
