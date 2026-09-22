@@ -87,7 +87,7 @@ if run_button:
         buffer_poly_wgs84 = so.transform(project_to_wgs84, buffer_poly)
         center_lon, center_lat = buffer_poly_wgs84.centroid.coords[0]
         
-        # 3. OpenStreetMap API를 통한 반경 내 실제 건물 추출 (단일+복합 다각형 모두 지원)
+        # 3. OpenStreetMap API를 통한 반경 내 실제 건물 추출 (POST 방식 적용으로 406 에러 방지)
         min_lon, min_lat, max_lon, max_lat = buffer_poly_wgs84.bounds
         overpass_url = "http://overpass-api.de/api/interpreter"
         
@@ -102,9 +102,13 @@ if run_button:
         
         bldg_data = []
         try:
-            # API 봇 차단을 방지하기 위한 User-Agent 헤더 추가
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-            response = requests.get(overpass_url, params={'data': overpass_query}, headers=headers, timeout=30)
+            headers = {
+                'User-Agent': 'AutoSurveySystem/1.0 (admin@local)',
+                'Accept': 'application/json',
+                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+            }
+            # 406 에러 방지를 위해 GET 대신 POST 전송방식 및 data 속성 사용
+            response = requests.post(overpass_url, data={'data': overpass_query}, headers=headers, timeout=30)
             
             if response.status_code == 200:
                 osm_data = response.json()
@@ -114,11 +118,8 @@ if run_button:
                     coords = []
                     tags = element.get('tags', {})
                     
-                    # 일반 단일 건물 (way) 처리
                     if element['type'] == 'way':
                         coords = [(node['lon'], node['lat']) for node in element.get('geometry', [])]
-                        
-                    # 대형 아파트 단지 등 복합 폴리곤 (relation) 처리
                     elif element['type'] == 'relation':
                         for member in element.get('members', []):
                             if member.get('role') == 'outer' and 'geometry' in member:
@@ -126,10 +127,8 @@ if run_button:
                     
                     if len(coords) >= 3:
                         try:
-                            # 핵심: 복잡한 아파트 형태의 꼬임 에러 방지를 위해 Convex Hull(볼록 껍질) 생성
                             bldg_poly = sg.MultiPoint(coords).convex_hull
                             
-                            # 생성된 건물이 반경 다각형에 1mm라도 걸쳐있는지(intersects) 확인
                             if bldg_poly.intersects(buffer_poly_wgs84):
                                 center = bldg_poly.centroid
                                 name = tags.get('name', '명칭없음 (도면확인 필요)')
@@ -149,7 +148,7 @@ if run_button:
                                 })
                                 bldg_id += 1
                         except Exception:
-                            pass # 형상이 완전히 깨진 예외적 쓰레기 데이터는 건너뜀
+                            pass
             else:
                 st.error(f"지도 API 서버 응답 오류가 발생했습니다. (상태 코드: {response.status_code})")
         except Exception as e:
@@ -166,19 +165,16 @@ if run_button:
         st.subheader("🗺️ 공간 분석 결과 (실제 걸쳐있는 건물 추출)")
         m = folium.Map(location=[center_lat, center_lon], zoom_start=17, tiles="OpenStreetMap")
         
-        # 반경 다각형
         folium.GeoJson(
             buffer_poly_wgs84,
             style_function=lambda x: {'fillColor': 'blue', 'color': 'blue', 'weight': 1, 'fillOpacity': 0.2}
         ).add_to(m)
         
-        # 선형
         folium.GeoJson(
             multi_line_wgs84,
             style_function=lambda x: {'color': 'red', 'weight': 3}
         ).add_to(m)
         
-        # 추출된 건물 노란색 외곽선 및 연번 마커 표시
         for bldg in bldg_data:
             folium.Polygon(
                 locations=[(lat, lon) for lon, lat in bldg['polygon']],
