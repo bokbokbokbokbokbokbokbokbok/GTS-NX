@@ -1,66 +1,76 @@
-import streamlit as st
+import platform
+import matplotlib.pyplot as plt
+from matplotlib import font_manager, rc
 import pandas as pd
-import folium
-from streamlit_folium import st_folium
+import streamlit as st
 
-# 페이지 설정
-st.set_page_config(page_title="위치 연동 지도 앱", layout="wide")
+# ==========================================
+# 1. 한글 폰트 설정 (OS별 자동 대응 및 경고 방지)
+# ==========================================
+if platform.system() == 'Windows':
+  rc('font', family='Malgun Gothic')
+elif platform.system() == 'Darwin':  # macOS
+  rc('font', family='AppleGothic')
+else:  # Linux (서버 배포 환경)
+  font_path = '/usr/share/fonts/truetype/nanum/NanumGothic.ttf'
+  if font_manager.os_path.exists(font_path):
+    font_name = font_manager.FontProperties(fname=font_path).get_name()
+    rc('font', family=font_name)
+  else:
+    plt.rcParams['font.family'] = 'sans-serif'
 
-st.title("📍 연번 선택 지도 줌인 시스템")
+# 그래프 마이너스 기호 깨짐 방지
+plt.rcParams['axes.unicode_minus'] = False
 
-# 1. 샘플 데이터프레임 생성 (실제 데이터로 교체하여 사용하세요)
-@st.cache_data
-def load_data():
-    return pd.DataFrame({
-        '연번': [1, 2, 3],
-        '장소명': ['서울시청', 'N서울타워', '경복궁'],
-        'lat': [37.5665, 37.5519, 37.5796],
-        'lon': [126.9780, 126.9918, 126.9770]
-    })
-
-df = load_data()
-
-st.subheader("📋 장소 목록 (행을 클릭하면 지도가 이동합니다)")
-
-# 2. 표 출력 및 단일 행 선택 이벤트 활성화
-# 경고 방지를 위해 컨테이너 활용 또는 표준 파라미터 사용
-event = st.dataframe(
-    df,
-    on_select="rerun",
-    selection_mode="single-row",
-    hide_index=True
+# ==========================================
+# 2. Streamlit 기본 페이지 설정
+# ==========================================
+st.set_page_config(
+    page_title="수위 및 보조관측망 모니터링", page_icon="📈", layout="wide"
 )
 
-# 3. 기본 지도 중심 설정 (선택된 값이 없으면 서울 시청 기준)
-map_lat, map_lon = 37.5665, 126.9780
-map_zoom = 12
+st.title("📊 보조관측망 및 수위 대시보드")
+st.markdown("---")
 
-# 4. 사용자가 행을 선택했을 경우 좌표 업데이트
-selected_rows = event.selection.rows
+# ==========================================
+# 3. 사이드바 구성
+# ==========================================
+st.sidebar.header("🔍 조회 필터")
+region = st.sidebar.selectbox("관측 지역 선택", ["고양", "서울", "인천", "기타"])
 
-if selected_rows:
-    selected_idx = selected_rows[0]
-    map_lat = df.loc[selected_idx, 'lat']
-    map_lon = df.loc[selected_idx, 'lon']
-    map_zoom = 16  # 선택 시 줌인 레벨 확대
-    
-    st.info(f"선택된 장소: **{df.loc[selected_idx, '장소명']}** (위도: {map_lat}, 경도: {map_lon})")
+# ==========================================
+# 4. 데이터 처리 및 출력 영역
+# ==========================================
+try:
+  # 예시 데이터 (실제 프로젝트에서는 파일 로드 또는 DB 조회 코드로 교체하세요)
+  data = {
+      "관측소명": [
+          f"{region} 제1관측소",
+          f"{region} 제2관측소",
+          f"{region} 제3관측소",
+      ],
+      "현재 수위 (m)": [1.45, 2.12, 1.88],
+      "상태": ["정상", "주의", "정상"],
+  }
+  df = pd.DataFrame(data)
 
-# 5. Folium 지도 객체 생성
-m = folium.Map(location=[map_lat, map_lon], zoom_start=map_zoom)
+  st.subheader(f"📍 {region} 지역 관측망 데이터 현황")
 
-# 6. 모든 마커 지도에 표시
-for idx, row in df.iterrows():
-    # 선택된 마커는 색상을 다르게 하거나 팝업을 다르게 줄 수도 있습니다.
-    is_selected = selected_rows and (selected_rows[0] == idx)
-    icon_color = "red" if is_selected else "blue"
-    
-    folium.Marker(
-        location=[row['lat'], row['lon']], 
-        popup=f"[{row['연번']}] {row['장소명']}",
-        tooltip=row['장소명'],
-        icon=folium.Icon(color=icon_color, icon="info-sign")
-    ).add_to(m)
+  # 데이터프레임 출력 (최신 규격 호환)
+  st.dataframe(df, use_container_width=True)
 
-# 7. Streamlit에 지도 렌더링
-st_folium(m, width="100%", height=500)
+  # ==========================================
+  # 5. 시각화 영역 (Matplotlib 한글 깨짐 해결)
+  # ==========================================
+  st.subheader("📈 관측소별 수위 비교 그래프")
+
+  fig, ax = plt.subplots(figsize=(10, 4))
+  ax.bar(df["관측소명"], df["현재 수위 (m)"], color="#4C72B0")
+  ax.set_ylabel("수위 (m)")
+  ax.set_title("관측소별 수위 현황")
+
+  # Streamlit에 Matplotlib 차트 렌더링
+  st.pyplot(fig)
+
+except Exception as e:
+  st.error(f"오류가 발생했습니다: {e}")
