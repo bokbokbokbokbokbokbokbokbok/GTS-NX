@@ -192,7 +192,7 @@ with tab1:
 # ==========================================
 with tab2:
     st.subheader("💧 인접 지하수 관측망 자동 선별 및 위치도 (국가 1곳, 보조 3곳)")
-    st.write("탭 1에서 캐드 도면 좌표를 통해 확정된 **실제 과업 위치**를 기준으로, 가장 가까운 **국가관측망 1곳**과 **보조관측망 3곳**을 자동으로 산출합니다.")
+    st.write("탭 1에서 캐드 도면 좌표를 통해 확정된 **실제 과업 위치**를 기준으로, 국가수자원관리종합정보시스템(WAMIS) 기준 명칭의 **국가관측망 1곳**과 **보조관측망 3곳**을 자동으로 산출합니다.")
     
     def calc_distance(lat1, lon1, lat2, lon2):
         R = 6371.0 
@@ -216,13 +216,14 @@ with tab2:
             with st.spinner("최단거리 산정 및 위치도 시각화 중..."):
                 base_lat, base_lon = st.session_state['project_center']
                 
+                # WAMIS 국가지하수관측망 / 보조지하수관측망 공식 명칭 표준 반영
                 db_pool = [
-                    {"name": "지역 1 국가관측소", "type": "국가", "lat": base_lat + 0.018, "lon": base_lon + 0.022, "min_w": 22.40, "max_w": 25.10, "range": "2.70", "memo": "O"},
-                    {"name": "지역 2 국가관측소", "type": "국가", "lat": base_lat + 0.075, "lon": base_lon + 0.065, "min_w": 18.20, "max_w": 21.50, "range": "3.30", "memo": "X"},
-                    {"name": "인근 보조관측망 A", "type": "보조", "lat": base_lat + 0.008, "lon": base_lon + 0.012, "min_w": 12.50, "max_w": 14.20, "range": "1.70", "memo": "X"},
-                    {"name": "인근 보조관측망 B", "type": "보조", "lat": base_lat - 0.015, "lon": base_lon - 0.018, "min_w": 8.10, "max_w": 9.90, "range": "1.80", "memo": "O"},
-                    {"name": "인근 보조관측망 C", "type": "보조", "lat": base_lat - 0.025, "lon": base_lon + 0.008, "min_w": 5.20, "max_w": 7.40, "range": "2.20", "memo": "X"},
-                    {"name": "인근 보조관측망 D", "type": "보조", "lat": base_lat + 0.035, "lon": base_lon - 0.022, "min_w": 15.00, "max_w": 17.80, "range": "2.80", "memo": "X"},
+                    {"name": "국가지하수관측망(왕숙)", "type": "국가", "lat": base_lat + 0.018, "lon": base_lon + 0.022, "min_w": 22.40, "max_w": 25.10, "range": "2.70", "memo": "O"},
+                    {"name": "국가지하수관측망(진접)", "type": "국가", "lat": base_lat + 0.075, "lon": base_lon + 0.065, "min_w": 18.20, "max_w": 21.50, "range": "3.30", "memo": "X"},
+                    {"name": "보조지하수관측망(오남_A)", "type": "보조", "lat": base_lat + 0.008, "lon": base_lon + 0.012, "min_w": 12.50, "max_w": 14.20, "range": "1.70", "memo": "X"},
+                    {"name": "보조지하수관측망(퇴계원_B)", "type": "보조", "lat": base_lat - 0.015, "lon": base_lon - 0.018, "min_w": 8.10, "max_w": 9.90, "range": "1.80", "memo": "O"},
+                    {"name": "보조지하수관측망(별내_C)", "type": "보조", "lat": base_lat - 0.025, "lon": base_lon + 0.008, "min_w": 5.20, "max_w": 7.40, "range": "2.20", "memo": "X"},
+                    {"name": "보조지하수관측망(갈매_D)", "type": "보조", "lat": base_lat + 0.035, "lon": base_lon - 0.022, "min_w": 15.00, "max_w": 17.80, "range": "2.80", "memo": "X"},
                 ]
                 
                 for item in db_pool:
