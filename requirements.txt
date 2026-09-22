@@ -1,6 +1,11 @@
 streamlit
 pandas
-openpyxl
 ezdxf
+pyproj
+shapely
 folium
 streamlit-folium
+requests
+matplotlib
+openpyxl
+numpy
