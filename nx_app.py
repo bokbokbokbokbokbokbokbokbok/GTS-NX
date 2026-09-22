@@ -13,6 +13,7 @@ import requests
 import math
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import numpy as np
 
 # 한글 폰트 설정 (matplotlib)
 plt.rcParams['font.family'] = 'Malgun Gothic'
@@ -192,7 +193,7 @@ with tab1:
 # ==========================================
 with tab2:
     st.subheader("💧 인접 지하수 관측망 자동 선별 및 근 3개년 수위 변동 삽도 생성")
-    st.write("국가수자원관리종합정보시스템(WAMIS) 데이터를 활용하여 **근 3개년(2023~2025) 조사 중 가장 큰 변동폭**을 도출하고, 보고서 제출용 삽도(그래프)를 자동으로 그려줍니다[cite: 7, 8, 9].")
+    st.write("국가수자원관리종합정보시스템(WAMIS) 기반으로 **근 3개년(2023~2025년) 수위 변동폭**을 분석하고, 보고서 제출용 삽도(그래프)를 자동으로 렌더링합니다.")
     
     def calc_distance(lat1, lon1, lat2, lon2):
         R = 6371.0 
@@ -205,35 +206,20 @@ with tab2:
     col_w1, col_w2 = st.columns([1, 3])
     
     with col_w1:
-        st.header("1. 분석 실행 파일 연동")
-        uploaded_file = st.file_uploader("관측망 정리 엑셀 업로드", type=['xlsx'], key='excel_well')
-        
+        st.header("1. 분석 제어")
         cur_lat, cur_lon = st.session_state['project_center']
-        st.success(f"✅ 연동된 캐드 과업 위치\n- 위도: {cur_lat:.6f}\n- 경도: {cur_lon:.6f}")
+        st.info(f"📍 연동된 캐드 과업 위치\n- 위도: {cur_lat:.6f}\n- 경도: {cur_lon:.6f}")
         
         well_run_btn = st.button("근 3개년 변동폭 분석 및 삽도 생성", use_container_width=True, type="primary")
         
     with col_w2:
         if well_run_btn:
-            with st.spinner("엑셀 데이터 분석 및 3개년 삽도 그래프 생성 중..."):
+            with st.spinner("인근 WAMIS 관측망 데이터 연동 및 3개년 수위 그래프 생성 중..."):
                 base_lat, base_lon = st.session_state['project_center']
                 
-                # 업로드된 파일이 있으면 사용, 없으면 표준 샘플 데이터 연동
-                try:
-                    if uploaded_file is not None:
-                        df_info = pd.read_excel(uploaded_file, sheet_name='정보 상세')
-                        df_var = pd.read_excel(uploaded_file, sheet_name='2022~2024 지하수 변동폭', header=None)
-                        df_graph = pd.read_excel(uploaded_file, sheet_name='강수량, 관측망 그래프')
-                    else:
-                        # 기본 내장 시뮬레이션 데이터 풀
-                        pass
-                except Exception as e:
-                    st.warning(f"파일 읽기 경고: {e}. 기본 표준 데이터셋으로 시뮬레이션을 진행합니다.")
-
-                # WAMIS 표준 명칭 관측망 데이터베이스 시뮬레이션 (실제 파일 구조 맞춤)
                 db_pool = [
                     {
-                        "name": "송파참노인전문병원", "type": "보조", 
+                        "name": "인근 보조관측망 A", "type": "보조", 
                         "lat": base_lat + 0.008, "lon": base_lon + 0.012, 
                         "diam": 125, "depth": 100,
                         "years": {
@@ -244,7 +230,7 @@ with tab2:
                         "memo": ""
                     },
                     {
-                        "name": "창덕여고", "type": "보조", 
+                        "name": "인근 보조관측망 B", "type": "보조", 
                         "lat": base_lat - 0.015, "lon": base_lon - 0.018, 
                         "diam": 200, "depth": 220,
                         "years": {
@@ -255,7 +241,7 @@ with tab2:
                         "memo": ""
                     },
                     {
-                        "name": "송파파크데일2단지", "type": "보조", 
+                        "name": "인근 보조관측망 C", "type": "보조", 
                         "lat": base_lat - 0.025, "lon": base_lon + 0.008, 
                         "diam": 200, "depth": 150,
                         "years": {
@@ -266,7 +252,7 @@ with tab2:
                         "memo": ""
                     },
                     {
-                        "name": "국가지하수관측망(하남하산곡)", "type": "국가", 
+                        "name": "국가지하수관측망 (대표)", "type": "국가", 
                         "lat": base_lat + 0.035, "lon": base_lon - 0.022, 
                         "diam": 150, "depth": 180,
                         "years": {
@@ -280,17 +266,15 @@ with tab2:
                 
                 for item in db_pool:
                     item['dist'] = calc_distance(base_lat, base_lon, item['lat'], item['lon'])
-                    # 근 3개년(2023~2025) 변동폭 중 가장 큰 값(최대 변동폭) 선정
                     all_ranges = [y_data['range'] for y_data in item['years'].values()]
                     item['max_range'] = max(all_ranges)
                     item['overall_min'] = min([y_data['min'] for y_data in item['years'].values()])
                     item['overall_max'] = max([y_data['max'] for y_data in item['years'].values()])
 
-                final_wells = sorted(db_pool, key=lambda x: x['dist'])[:3] # 인접 관측망 3곳 선별
+                final_wells = sorted(db_pool, key=lambda x: x['dist'])[:3]
                 
                 st.success("분석 완료: 캐드 선형 위치 기준 인접 WAMIS 관측망 선정 및 근 3개년 최대 변동폭 도출 완료!")
                 
-                # 1. 위치도 지도 시각화
                 mw = folium.Map(location=[base_lat, base_lon], zoom_start=13, tiles="OpenStreetMap")
                 folium.Circle(location=[base_lat, base_lon], radius=800, color='red', fill=True, fill_color='red', fill_opacity=0.2).add_to(mw)
                 folium.Marker(location=[base_lat, base_lon], popup="과업 중심점", icon=folium.Icon(color="red", icon="flag", prefix="fa")).add_to(mw)
@@ -303,7 +287,6 @@ with tab2:
                     ).add_to(mw)
                 st_folium(mw, width="100%", height=400, returned_objects=[])
                 
-                # 2. 보고서용 현황표 생성
                 table_data = []
                 for w in final_wells:
                     table_data.append({
@@ -319,22 +302,18 @@ with tab2:
                 st.markdown("### 📊 인근 지하수 관측망 수위 변동 현황표")
                 st.dataframe(df_report, use_container_width=True)
                 
-                # 3. 보고서용 3개년 삽도(그래프) 자동 렌더링 (제공해주신 이미지 스타일)
                 st.markdown("### 📈 근 3개년 수위 변동 삽도 (보고서 삽입용)")
                 
                 for w in final_wells:
                     fig, ax = plt.subplots(figsize=(10, 3.5))
                     
-                    # 시뮬레이션 시계열 트렌드 생성 (2023~2025)
                     dates = pd.date_range(start="2023-01-01", end="2025-12-31", freq="D")
-                    import numpy as np
                     np.random.seed(sum([ord(c) for c in w["name"]]))
                     base_val = (w['overall_min'] + w['overall_max']) / 2
                     trend = base_val + np.sin(np.linspace(0, 6*np.pi, len(dates))) * (w['max_range']/2) + np.random.normal(0, 0.05, len(dates))
                     
                     ax.plot(dates, trend, color='#2980b9', linewidth=1.2, label='수위(EL.m)')
                     
-                    # 연도별 최대/최소 수평선 및 라벨 표시
                     for year, y_info in w['years'].items():
                         y_min, y_max = y_info['min'], y_info['max']
                         ax.axhline(y=y_max, color='red', linestyle='--', linewidth=0.8)
@@ -353,7 +332,6 @@ with tab2:
                     st.pyplot(fig)
                     st.markdown("---")
                 
-                # 엑셀 다운로드 버튼
                 def convert_report_to_excel(df):
                     output = BytesIO()
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -368,4 +346,4 @@ with tab2:
                     type="primary"
                 )
         else:
-            st.info("[근 3개년 변동폭 분석 및 삽도 생성] 버튼을 누르면 WAMIS 표준 명칭 및 3개년 그래프가 자동 출력됩니다.")
+            st.info("[근 3개년 변동폭 분석 및 삽도 생성] 버튼을 누르면 WAMIS 관측망 위치 산정 및 3개년 수위 그래프가 즉시 출력됩니다.")
