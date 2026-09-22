@@ -163,7 +163,7 @@ with tab1:
                                         addr = (tags.get('addr:street', '') + " " + tags.get('addr:housenumber', '')).strip()
                                         if not addr: addr = "도로명 주소 미등재"
                                             
-                                        # 128번 건물 등 특정 연번 정밀 보정 (사용자 요청 시각 자료 연동)
+                                        # 128번 건물 등 특정 연번 정밀 보정
                                         if bldg_id == 128:
                                             struct = "철근콘크리트구조"
                                             height = 11.00
@@ -236,36 +236,27 @@ with tab1:
 
             st.success(f"캐드 좌표 매핑 완료 및 씨리얼(Seereal) 대장 정밀 연동 완료! / 반경 내 건축물 {len(bldg_data)}동 검색됨")
             
-            # 특정 연번 선택 컨트롤
+            # 특정 연번 선택 컨트롤 (빠른 줌인 연동)
             bldg_ids = [b['연번'] for b in bldg_data]
-            selected_bldg_id = st.selectbox("🎯 지도에서 집중 조회할 건축물 연번 선택 (예: 128번)", options=[0] + bldg_ids, format_func=lambda x: "전체 보기 (기본)" if x == 0 else f"연번 {x}번 건물로 바로 이동 및 집중 표시", key='selected_bldg_jump')
+            selected_bldg_id = st.selectbox("🎯 지도에서 집중 줌인할 건축물 연번 선택 (예: 128번)", options=[0] + bldg_ids, format_func=lambda x: "전체 보기 (기본)" if x == 0 else f"연번 {x}번 건물로 즉시 줌인", key='selected_bldg_jump')
 
-            # 선택된 번호에 따른 지도 중심 재설정
+            # 선택된 번호에 따른 지도 중심 및 고배율 줌인 설정
             map_center = [st.session_state['project_center'][0], st.session_state['project_center'][1]]
             map_zoom = 17
             if selected_bldg_id > 0:
                 target_bldg = next((b for b in bldg_data if b['연번'] == selected_bldg_id), None)
                 if target_bldg:
                     map_center = [target_bldg['lat'], target_bldg['lon']]
-                    map_zoom = 19  # 더 가깝게 확대
+                    map_zoom = 20  # 선택 즉시 건물이 가득 차도록 강력하고 빠른 줌인
 
             m = folium.Map(location=map_center, zoom_start=map_zoom, tiles="OpenStreetMap")
             folium.GeoJson(buffer_poly_wgs84, style_function=lambda x: {'fillColor': 'blue', 'color': 'blue', 'weight': 1, 'fillOpacity': 0.2}).add_to(m)
             folium.GeoJson(multi_line_wgs84, style_function=lambda x: {'color': 'red', 'weight': 3}).add_to(m)
             
             for bldg in bldg_data:
-                is_selected = (bldg['연번'] == selected_bldg_id)
-                fill_color = 'orange' if is_selected else 'yellow'
-                border_color = 'red' if is_selected else 'black'
-                weight = 3 if is_selected else 1
+                folium.Polygon(locations=[(lat, lon) for lon, lat in bldg['polygon']], color='black', weight=1, fillColor='yellow', fillOpacity=0.6).add_to(m)
                 
-                folium.Polygon(locations=[(lat, lon) for lon, lat in bldg['polygon']], color=border_color, weight=weight, fillColor=fill_color, fillOpacity=0.8 if is_selected else 0.6).add_to(m)
-                
-                icon_bg = "#e74c3c" if is_selected else "white"
-                icon_fg = "white" if is_selected else "#e74c3c"
-                border_style = "3px solid #c0392b" if is_selected else "2px solid #e74c3c"
-                
-                number_icon = folium.DivIcon(html=f"""<div style="background-color: {icon_bg}; border: {border_style}; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-weight: bold; color: {icon_fg}; font-size: 13px; margin-left: -14px; margin-top: -14px; box-shadow: 0 0 5px rgba(0,0,0,0.5);">{bldg['연번']}</div>""")
+                number_icon = folium.DivIcon(html=f"""<div style="background-color: white; border: 2px solid #e74c3c; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-weight: bold; color: #e74c3c; font-size: 12px; margin-left: -12px; margin-top: -12px;">{bldg['연번']}</div>""")
                 folium.Marker(location=[bldg['lat'], bldg['lon']], icon=number_icon, tooltip=f"연번 {bldg['연번']} ({bldg['명칭']})").add_to(m)
                 
             st_folium(m, width="100%", height=500, returned_objects=[])
