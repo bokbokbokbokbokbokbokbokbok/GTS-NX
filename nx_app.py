@@ -34,59 +34,86 @@ st.title("📊 보조관측망 및 수위 대시보드")
 st.markdown("---")
 
 # ==========================================
-# 3. 사이드바 (관정 및 연도별 조사 필터 복원)
+# 3. 탭 구조 구성 (관측망, 관정, 연도변조사 복원)
 # ==========================================
-st.sidebar.header("🔍 조회 필터")
-region = st.sidebar.selectbox("관측 지역 선택", ["고양", "서울", "인천", "기타"])
+tab1, tab2, tab3 = st.tabs(
+    ["📈 관측망 현황", "🔍 관정 관리", "📅 연도변조사"]
+)
 
-# 💡 '관정' 선택 기능 복원
-well_options = ["제1관정", "제2관정", "제3관정", "보조관정 A"]
-selected_well = st.sidebar.selectbox("관정 선택", well_options)
-
-# 💡 '연도별 조사(연도변조사)' 기능 복원
-year_options = [2026, 2025, 2024, 2023]
-selected_year = st.sidebar.selectbox("연도별 조사 선택", year_options)
-
-# ==========================================
-# 4. 데이터 처리 및 출력 영역
-# ==========================================
-try:
-  st.subheader(
-      f"📍 {region} 지역 - [{selected_well}] ({selected_year}년 연도별 조사"
-      " 현황)"
+# [Tab 1] 관측망 현황
+with tab1:
+  st.subheader("보조관측망 전체 현황")
+  region = st.selectbox(
+      "관측 지역 선택", ["고양", "서울", "인천", "기타"], key="tab1_region"
   )
 
-  # 예시 데이터 (실제 프로젝트의 데이터 로드 로직으로 대체해서 사용하세요)
-  data = {
-      "측정 시기": ["1분기", "2분기", "3분기", "4분기"],
-      "수위 (m)": [1.45, 2.12, 1.88, 1.95],
-      "조사 상태": ["완료", "완료", "진행중", "예정"],
-  }
-  df = pd.DataFrame(data)
+  try:
+    data1 = {
+        "관측소명": [
+            f"{region} 제1관측소",
+            f"{region} 제2관측소",
+            f"{region} 제3관측소",
+        ],
+        "현재 수위 (m)": [1.45, 2.12, 1.88],
+        "상태": ["정상", "주의", "정상"],
+    }
+    df1 = pd.DataFrame(data1)
+    st.dataframe(df1, use_container_width=True)
+  except Exception as e:
+    st.error(f"오류가 발생했습니다: {e}")
 
-  # 데이터프레임 출력 (최신 규격 호환)
-  st.dataframe(df, use_container_width=True)
-
-  # ==========================================
-  # 5. 시각화 영역 (관정 및 연도별 데이터 그래프)
-  # ==========================================
-  st.subheader(f"📈 {selected_well} 수위 변화 추이 ({selected_year}년)")
-
-  fig, ax = plt.subplots(figsize=(10, 4))
-  ax.plot(
-      df["측정 시기"],
-      df["수위 (m)"],
-      marker="o",
-      color="#4C72B0",
-      linewidth=2,
-      markersize=6,
+# [Tab 2] 관정 관리
+with tab2:
+  st.subheader("관정별 상세 정보 관리")
+  selected_well = st.selectbox(
+      "관정 선택",
+      ["제1관정", "제2관정", "제3관정", "보조관정 A"],
+      key="tab2_well",
   )
-  ax.set_ylabel("수위 (m)")
-  ax.set_title(f"{selected_year}년 {selected_well} 수위 모니터링")
-  ax.grid(True, linestyle="--", alpha=0.5)
 
-  # Streamlit에 Matplotlib 차트 렌더링
-  st.pyplot(fig)
+  try:
+    st.write(f"현재 선택된 **{selected_well}**의 상세 제원 정보입니다.")
+    data2 = {
+        "항목": ["심도 (m)", "구경 (mm)", "설치일자", "운영 상태"],
+        "내용": ["150m", "200mm", "2020-05-12", "가동중"],
+    }
+    df2 = pd.DataFrame(data2)
+    st.dataframe(df2, use_container_width=True)
+  except Exception as e:
+    st.error(f"오류가 발생했습니다: {e}")
 
-except Exception as e:
-  st.error(f"오류가 발생했습니다: {e}")
+# [Tab 3] 연도변조사 (연도별 조사 데이터 및 시각화)
+with tab3:
+  st.subheader("📅 연도변조사 (연도별 조사 데이터)")
+  selected_year = st.selectbox(
+      "조사 연도 선택", [2026, 2025, 2024, 2023], key="tab3_year"
+  )
+
+  try:
+    data_year = {
+        "분기/시기": ["1분기", "2분기", "3분기", "4분기"],
+        "평균 수위 (m)": [1.50, 1.85, 2.05, 1.70],
+        "조사 결과": ["적정", "주의", "경계", "적정"],
+    }
+    df_year = pd.DataFrame(data_year)
+
+    st.dataframe(df_year, use_container_width=True)
+
+    # 연도변조사 시각화 그래프
+    st.markdown(f"### 📈 {selected_year}년도 연도변조사 수위 추이")
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.plot(
+        df_year["분기/시기"],
+        df_year["평균 수위 (m)"],
+        marker="o",
+        color="#2ca02c",
+        linewidth=2,
+        markersize=6,
+    )
+    ax.set_ylabel("수위 (m)")
+    ax.set_title(f"{selected_year}년 연도변조사 모니터링 그래프")
+    ax.grid(True, linestyle="--", alpha=0.5)
+
+    st.pyplot(fig)
+  except Exception as e:
+    st.error(f"오류가 발생했습니다: {e}")
