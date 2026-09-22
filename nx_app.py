@@ -58,8 +58,8 @@ with tab1:
         st.markdown("---")
         st.header("2. 과업 위치 수동 보정 (필수)")
         st.write("캐드 좌표가 로컬 좌표일 경우 아래에서 정확한 과업 중심 좌표를 직접 지정하세요.")
-        manual_lat = st.number_input("과업 중심 위도", value=st.session_state['project_center'][0], format="("%.6f"), key='m_lat')
-        manual_lon = st.number_input("과업 중심 경도", value=st.session_state['project_center'][1], format="("%.6f"), key='m_lon')
+        manual_lat = st.number_input("과업 중심 위도", value=st.session_state['project_center'][0], format="%.6f", key='m_lat')
+        manual_lon = st.number_input("과업 중심 경도", value=st.session_state['project_center'][1], format="%.6f", key='m_lon')
         
         st.markdown("---")
         buffer_radius = st.number_input("조사 반경 설정 (m)", min_value=1, max_value=500, value=30, step=5, key='buf_tab1')
@@ -85,7 +85,7 @@ with tab1:
                         if len(pts) > 1:
                             lines_in_proj.append(sg.LineString(pts))
 
-                if tmp_file_path and os.path.exists(tmp_file_path):
+                if 'tmp_file_path' in locals() and os.path.exists(tmp_file_path):
                     os.remove(tmp_file_path)
 
                 # OpenStreetMap 기반으로 과업 중심점 주변 건물 조회
@@ -163,7 +163,7 @@ with tab1:
                 })
                 st.dataframe(df_result, use_container_width=True)
         else:
-            st.info("좌측에서 DXF 파일을 업로드하고 [과업 위치 수동 보정] 값을 확인하신 뒤 건무 공간분석을 실행해주세요.")
+            st.info("좌측에서 DXF 파일을 업로드하고 [과업 위치 수동 보정] 값을 확인하신 뒤 건물 공간분석을 실행해주세요.")
 
 
 # ==========================================
@@ -195,7 +195,6 @@ with tab2:
             with st.spinner("최단거리 산정 및 위치도 시각화 중..."):
                 base_lat, base_lon = st.session_state['project_center']
                 
-                # 과업 위치 주변 가상의 실측 관측망 풀 (고양-은평선 인근 실측 기준)
                 db_pool = [
                     {"name": "고양원흥 관측소", "type": "국가", "lat": base_lat + 0.025, "lon": base_lon + 0.030, "min_w": 25.40, "max_w": 28.10, "range": "2.70", "memo": "O"},
                     {"name": "파주탄현 관측소", "type": "국가", "lat": base_lat + 0.090, "lon": base_lon + 0.080, "min_w": 18.20, "max_w": 21.50, "range": "3.30", "memo": "X"},
@@ -228,12 +227,11 @@ with tab2:
                 ).add_to(mw)
                 
                 for well in final_wells:
-                    color = "darkblue" if well['type'] == '국가' else "green"
                     folium.Marker(
                         location=[well['lat'], well['lon']],
                         popup=f"<b>[{well['type']}] {well['name']}</b><br>이격거리: {well['dist']:.1f}km<br>최고수위: {well['max_w']}m",
                         tooltip=f"{well['name']} ({well['type']}, {well['dist']:.1f}km)",
-                        icon=folium.Icon(color="blue" if color=="darkblue" else "green", icon="tint", prefix="fa")
+                        icon=folium.Icon(color="blue" if well['type'] == '국가' else "green", icon="tint", prefix="fa")
                     ).add_to(mw)
                     
                     folium.PolyLine(
