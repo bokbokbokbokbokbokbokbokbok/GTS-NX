@@ -225,36 +225,68 @@ with tab1:
                 except Exception as e:
                     st.warning(f"건물 데이터 통신 경고: {e}")
 
-                st.success(f"캐드 좌표 매핑 완료 및 씨리얼(Seereal) 대장 정밀 연동 완료! / 반경 내 건축물 {len(bldg_data)}동 검색됨")
-                
-                m = folium.Map(location=[center_lat, center_lon], zoom_start=17, tiles="OpenStreetMap")
-                folium.GeoJson(buffer_poly_wgs84, style_function=lambda x: {'fillColor': 'blue', 'color': 'blue', 'weight': 1, 'fillOpacity': 0.2}).add_to(m)
-                folium.GeoJson(multi_line_wgs84, style_function=lambda x: {'color': 'red', 'weight': 3}).add_to(m)
-                
-                for bldg in bldg_data:
-                    folium.Polygon(locations=[(lat, lon) for lon, lat in bldg['polygon']], color='black', weight=1, fillColor='yellow', fillOpacity=0.6).add_to(m)
-                    number_icon = folium.DivIcon(html=f"""<div style="background-color: white; border: 2px solid #e74c3c; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-weight: bold; color: #e74c3c; font-size: 12px; margin-left: -12px; margin-top: -12px;">{bldg['연번']}</div>""")
-                    folium.Marker(location=[bldg['lat'], bldg['lon']], icon=number_icon, tooltip=f"연번 {bldg['연번']}").add_to(m)
-                    
-                st_folium(m, width="100%", height=500, returned_objects=[])
-                
-                df_result = pd.DataFrame(bldg_data)[["연번", "명칭", "도로명", "지번", "구조형식", "높이(m)\n(건축면적, m2)", "층수\n(지하/지상)", "용도", "준공년도", "기한", "등급", "기초형식\n(내진설계)", "건축물대장\n유무", "도면\n보유현황", "비고(지역 및 구역 등)"]]
-                st.markdown("### 📊 연도변조사 대상 건축물 현황표 (씨리얼 대장 정밀 연동 완료)")
-                st.dataframe(df_result, use_container_width=True)
-                
-                def convert_tab1_to_excel(df):
-                    output = BytesIO()
-                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        df.to_excel(writer, index=False, sheet_name='연도변조사 현황')
-                    return output.getvalue()
+                st.session_state['bldg_data'] = bldg_data
+                st.session_state['buffer_poly_wgs84'] = buffer_poly_wgs84
+                st.session_state['multi_line_wgs84'] = multi_line_wgs84
 
-                st.download_button(
-                    label="📥 연도변조사 현황 엑셀 다운로드",
-                    data=convert_tab1_to_excel(df_result),
-                    file_name="연도변조사_현황_씨리얼정밀연동.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    type="primary"
-                )
+        if 'bldg_data' in st.session_state and st.session_state['bldg_data']:
+            bldg_data = st.session_state['bldg_data']
+            buffer_poly_wgs84 = st.session_state['buffer_poly_wgs84']
+            multi_line_wgs84 = st.session_state['multi_line_wgs84']
+
+            st.success(f"캐드 좌표 매핑 완료 및 씨리얼(Seereal) 대장 정밀 연동 완료! / 반경 내 건축물 {len(bldg_data)}동 검색됨")
+            
+            # 특정 연번 선택 컨트롤
+            bldg_ids = [b['연번'] for b in bldg_data]
+            selected_bldg_id = st.selectbox("🎯 지도에서 집중 조회할 건축물 연번 선택 (예: 128번)", options=[0] + bldg_ids, format_func=lambda x: "전체 보기 (기본)" if x == 0 else f"연번 {x}번 건물로 바로 이동 및 집중 표시", key='selected_bldg_jump')
+
+            # 선택된 번호에 따른 지도 중심 재설정
+            map_center = [st.session_state['project_center'][0], st.session_state['project_center'][1]]
+            map_zoom = 17
+            if selected_bldg_id > 0:
+                target_bldg = next((b for b in bldg_data if b['연번'] == selected_bldg_id), None)
+                if target_bldg:
+                    map_center = [target_bldg['lat'], target_bldg['lon']]
+                    map_zoom = 19  # 더 가깝게 확대
+
+            m = folium.Map(location=map_center, zoom_start=map_zoom, tiles="OpenStreetMap")
+            folium.GeoJson(buffer_poly_wgs84, style_function=lambda x: {'fillColor': 'blue', 'color': 'blue', 'weight': 1, 'fillOpacity': 0.2}).add_to(m)
+            folium.GeoJson(multi_line_wgs84, style_function=lambda x: {'color': 'red', 'weight': 3}).add_to(m)
+            
+            for bldg in bldg_data:
+                is_selected = (bldg['연번'] == selected_bldg_id)
+                fill_color = 'orange' if is_selected else 'yellow'
+                border_color = 'red' if is_selected else 'black'
+                weight = 3 if is_selected else 1
+                
+                folium.Polygon(locations=[(lat, lon) for lon, lat in bldg['polygon']], color=border_color, weight=weight, fillColor=fill_color, fillOpacity=0.8 if is_selected else 0.6).add_to(m)
+                
+                icon_bg = "#e74c3c" if is_selected else "white"
+                icon_fg = "white" if is_selected else "#e74c3c"
+                border_style = "3px solid #c0392b" if is_selected else "2px solid #e74c3c"
+                
+                number_icon = folium.DivIcon(html=f"""<div style="background-color: {icon_bg}; border: {border_style}; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-weight: bold; color: {icon_fg}; font-size: 13px; margin-left: -14px; margin-top: -14px; box-shadow: 0 0 5px rgba(0,0,0,0.5);">{bldg['연번']}</div>""")
+                folium.Marker(location=[bldg['lat'], bldg['lon']], icon=number_icon, tooltip=f"연번 {bldg['연번']} ({bldg['명칭']})").add_to(m)
+                
+            st_folium(m, width="100%", height=500, returned_objects=[])
+            
+            df_result = pd.DataFrame(bldg_data)[["연번", "명칭", "도로명", "지번", "구조형식", "높이(m)\n(건축면적, m2)", "층수\n(지하/지상)", "용도", "준공년도", "기한", "등급", "기초형식\n(내진설계)", "건축물대장\n유무", "도면\n보유현황", "비고(지역 및 구역 등)"]]
+            st.markdown("### 📊 연도변조사 대상 건축물 현황표 (씨리얼 대장 정밀 연동 완료)")
+            st.dataframe(df_result, use_container_width=True)
+            
+            def convert_tab1_to_excel(df):
+                output = BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df.to_excel(writer, index=False, sheet_name='연도변조사 현황')
+                return output.getvalue()
+
+            st.download_button(
+                label="📥 연도변조사 현황 엑셀 다운로드",
+                data=convert_tab1_to_excel(df_result),
+                file_name="연도변조사_현황_씨리얼정밀연동.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary"
+            )
         else:
             st.info("왼쪽에서 DXF 파일과 좌표계를 선택하고 [건물 공간분석 및 씨리얼 정밀 연동 실행]을 누르세요.")
 
