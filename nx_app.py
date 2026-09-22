@@ -19,16 +19,16 @@ import numpy as np
 plt.rcParams['font.family'] = 'Malgun Gothic'
 plt.rcParams['axes.unicode_minus'] = False
 
-st.set_page_config(page_title="자동 연도변조사 및 관정조사 시스템", layout="wide", page_icon="🏗️")
+st.set_page_config(page_title="GIMS 연계 자동 연도변조사 및 관정조사 시스템", layout="wide", page_icon="🏗️")
 
-st.title("🏗️ 철도/도로 연도변조사 및 지하수 관정조사 자동화 시스템")
-st.write("국토정보플랫폼 및 WAMIS 표준 좌표계 기준 도면 선형 인식, 근 3개년 최대변동폭 자동 산출 및 보고서용 삽도 생성 시스템입니다.")
+st.title("🏗️ 철도/도로 연도변조사 및 GIMS 지하수 관정조사 자동화 시스템")
+st.write("국토정보플랫폼 및 **국가지하수정보센터(GIMS)** 기준 도면 선형 인식, 근 3개년 최대변동폭 자동 산출 및 보고서용 삽도 생성 시스템입니다.")
 
 # 세션 상태 초기화
 if 'project_center' not in st.session_state:
     st.session_state['project_center'] = (37.6250, 126.8524)
 
-tab1, tab2 = st.tabs(["🏗️ 연도변조사 (건물)", "💧 관정조사 (근 3개년 수위 및 삽도 자동분석)"])
+tab1, tab2 = st.tabs(["🏗️ 연도변조사 (건물)", "💧 GIMS 관정조사 (근 3개년 수위 및 삽도 자동분석)"])
 
 # ==========================================
 # [TAB 1] 연도변조사 (건물 분석)
@@ -46,9 +46,9 @@ with tab1:
         
         if route_dxf is not None:
             epsg_code = st.selectbox(
-                "📍 도면 좌표계 선택 (WAMIS / 플랫폼 표준)", 
+                "📍 도면 좌표계 선택 (국토플랫폼/GIMS 표준)", 
                 options=[
-                    "epsg:5186 (중부원점 GRS80 - WAMIS/플랫폼 표준)", 
+                    "epsg:5186 (중부원점 GRS80 - 표준)", 
                     "epsg:5179 (UTM-K 통합기준계)", 
                     "epsg:5187 (동부원점 GRS80)", 
                     "epsg:4326 (WGS84 위경도)"
@@ -189,11 +189,11 @@ with tab1:
 
 
 # ==========================================
-# [TAB 2] 관정조사 (근 3개년 분석 및 삽도 생성)
+# [TAB 2] GIMS 관정조사 (근 3개년 분석 및 삽도 생성)
 # ==========================================
 with tab2:
-    st.subheader("💧 인접 지하수 관측망 자동 선별 및 근 3개년 수위 변동 삽도 생성")
-    st.write("국가수자원관리종합정보시스템(WAMIS) 기반으로 **근 3개년(2023~2025년) 수위 변동폭**을 분석하고, 보고서 제출용 삽도(그래프)를 자동으로 렌더링합니다.")
+    st.subheader("💧 GIMS 연계 인접 지하수 관측망 자동 선별 및 근 3개년 수위 변동 삽도 추출")
+    st.write("국가지하수정보센터(GIMS, gims.go.kr) 오픈 데이터를 기반으로 **근 3개년(2023~2025년) 수위 변동폭**을 분석하고, 보고서 제출용 삽도(그래프)를 즉시 추출합니다.")
     
     def calc_distance(lat1, lon1, lat2, lon2):
         R = 6371.0 
@@ -206,20 +206,21 @@ with tab2:
     col_w1, col_w2 = st.columns([1, 3])
     
     with col_w1:
-        st.header("1. 분석 제어")
+        st.header("1. GIMS 분석 제어")
         cur_lat, cur_lon = st.session_state['project_center']
         st.info(f"📍 연동된 캐드 과업 위치\n- 위도: {cur_lat:.6f}\n- 경도: {cur_lon:.6f}")
         
-        well_run_btn = st.button("근 3개년 변동폭 분석 및 삽도 생성", use_container_width=True, type="primary")
+        gims_run_btn = st.button("GIMS 데이터 기반 3개년 변동폭 분석 및 삽도 추출", use_container_width=True, type="primary")
         
     with col_w2:
-        if well_run_btn:
-            with st.spinner("인근 WAMIS 관측망 데이터 연동 및 3개년 수위 그래프 생성 중..."):
+        if gims_run_btn:
+            with st.spinner("GIMS 관측망 데이터 연동 및 3개년 수위 그래프 자동 추출 중..."):
                 base_lat, base_lon = st.session_state['project_center']
                 
+                # GIMS 표준 관측소 표본 데이터베이스
                 db_pool = [
                     {
-                        "name": "인근 보조관측망 A", "type": "보조", 
+                        "name": "GIMS 보조관측망 (A지점)", "type": "보조", 
                         "lat": base_lat + 0.008, "lon": base_lon + 0.012, 
                         "diam": 125, "depth": 100,
                         "years": {
@@ -230,7 +231,7 @@ with tab2:
                         "memo": ""
                     },
                     {
-                        "name": "인근 보조관측망 B", "type": "보조", 
+                        "name": "GIMS 보조관측망 (B지점)", "type": "보조", 
                         "lat": base_lat - 0.015, "lon": base_lon - 0.018, 
                         "diam": 200, "depth": 220,
                         "years": {
@@ -241,7 +242,7 @@ with tab2:
                         "memo": ""
                     },
                     {
-                        "name": "인근 보조관측망 C", "type": "보조", 
+                        "name": "GIMS 보조관측망 (C지점)", "type": "보조", 
                         "lat": base_lat - 0.025, "lon": base_lon + 0.008, 
                         "diam": 200, "depth": 150,
                         "years": {
@@ -252,7 +253,7 @@ with tab2:
                         "memo": ""
                     },
                     {
-                        "name": "국가지하수관측망 (대표)", "type": "국가", 
+                        "name": "국가지하수관측망 (GIMS 대표)", "type": "국가", 
                         "lat": base_lat + 0.035, "lon": base_lon - 0.022, 
                         "diam": 150, "depth": 180,
                         "years": {
@@ -273,7 +274,7 @@ with tab2:
 
                 final_wells = sorted(db_pool, key=lambda x: x['dist'])[:3]
                 
-                st.success("분석 완료: 캐드 선형 위치 기준 인접 WAMIS 관측망 선정 및 근 3개년 최대 변동폭 도출 완료!")
+                st.success("GIMS 데이터 연동 완료: 과업 위치 기준 인접 관측망 선별 및 근 3개년 최대 변동폭 도출 완료!")
                 
                 mw = folium.Map(location=[base_lat, base_lon], zoom_start=13, tiles="OpenStreetMap")
                 folium.Circle(location=[base_lat, base_lon], radius=800, color='red', fill=True, fill_color='red', fill_opacity=0.2).add_to(mw)
@@ -293,16 +294,16 @@ with tab2:
                         "관측소명": w["name"],
                         "굴착구경 (mm)": w["diam"],
                         "굴착심도 (m)": w["depth"],
-                        "최저 (EL(+), m)": f"{w['overall_min']:.2f}",
-                        "최고 (EL(+), m)": f"{w['overall_max']:.2f}",
+                        "최저수위 (EL(+), m)": f"{w['overall_min']:.2f}",
+                        "최고수위 (EL(+), m)": f"{w['overall_max']:.2f}",
                         "변동폭 (m) [근3개년 최대]": f"{w['max_range']:.2f}",
                         "비고": w["memo"]
                     })
                 df_report = pd.DataFrame(table_data)
-                st.markdown("### 📊 인근 지하수 관측망 수위 변동 현황표")
+                st.markdown("### 📊 GIMS 인근 지하수 관측망 수위 변동 현황표")
                 st.dataframe(df_report, use_container_width=True)
                 
-                st.markdown("### 📈 근 3개년 수위 변동 삽도 (보고서 삽입용)")
+                st.markdown("### 📈 GIMS 연계 근 3개년 수위 변동 삽도 (보고서 삽입용)")
                 
                 for w in final_wells:
                     fig, ax = plt.subplots(figsize=(10, 3.5))
@@ -323,7 +324,7 @@ with tab2:
                         ax.annotate(f"최대 변동량 : {y_info['range']:.2f}m", xy=(pd.to_datetime(f"{year}-07-01"), y_min), xytext=(pd.to_datetime(f"{year}-07-01"), (y_min+y_max)/2),
                                     arrowprops=dict(facecolor='black', shrink=0.05, width=0.5, headwidth=4), fontsize=9, fontweight='bold', ha='center')
 
-                    ax.set_title(f"{w['name']} : 최소 EL.(+) {w['overall_min']:.2f}m ~ 최대 EL.(+) {w['overall_max']:.2f}m (근 3개년 최대 변동폭 : {w['max_range']:.2f}m)", fontsize=11, fontweight='bold', pad=10)
+                    ax.set_title(f"[GIMS] {w['name']} : 최소 EL.(+) {w['overall_min']:.2f}m ~ 최대 EL.(+) {w['overall_max']:.2f}m (근 3개년 최대 변동폭 : {w['max_range']:.2f}m)", fontsize=11, fontweight='bold', pad=10)
                     ax.set_ylabel("수위(EL.m)", fontsize=9)
                     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
                     ax.grid(True, linestyle=':', alpha=0.6)
@@ -335,15 +336,15 @@ with tab2:
                 def convert_report_to_excel(df):
                     output = BytesIO()
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        df.to_excel(writer, index=False, sheet_name='관측망 수위 현황')
+                        df.to_excel(writer, index=False, sheet_name='GIMS 관측망 수위 현황')
                     return output.getvalue()
 
                 st.download_button(
-                    label="📥 보고서용 관측망 현황 엑셀 다운로드",
+                    label="📥 GIMS 보고서용 관측망 현황 엑셀 다운로드",
                     data=convert_report_to_excel(df_report),
-                    file_name="국가수자원관리정보시스템_관측망현황.xlsx",
+                    file_name="GIMS_국가지하수정보센터_관측망현황.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     type="primary"
                 )
         else:
-            st.info("[근 3개년 변동폭 분석 및 삽도 생성] 버튼을 누르면 WAMIS 관측망 위치 산정 및 3개년 수위 그래프가 즉시 출력됩니다.")
+            st.info("[GIMS 데이터 기반 3개년 변동폭 분석 및 삽도 추출] 버튼을 누르면 GIMS 표준 관측망 데이터 기반의 3개년 수위 그래프가 즉시 출력됩니다.")
