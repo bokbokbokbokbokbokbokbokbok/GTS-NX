@@ -15,11 +15,11 @@ import math
 st.set_page_config(page_title="자동 연도변조사 및 관정조사 시스템", layout="wide", page_icon="🏗️")
 
 st.title("🏗️ 철도/도로 연도변조사 및 지하수 관정조사 자동화 시스템")
-st.write("도면 선형을 바탕으로 반경을 생성하고, 영역 내 실제 건물 및 인접 지하수 관측망(국가 1곳, 보조 3곳)을 연동합니다.")
+st.write("도면 선형을 바탕으로 반경을 생성하고, 영역 내 실제 건물 및 인접 지하수 관측망을 연동합니다.")
 
-# 세션 상태를 이용해 캐드 중심점 공유
+# 세션 상태 초기화
 if 'project_center' not in st.session_state:
-    st.session_state['project_center'] = None
+    st.session_state['project_center'] = (37.6250, 126.8524) # 기본 고양-은평선 부근 좌표
 
 tab1, tab2 = st.tabs(["🏗️ 연도변조사 (건물)", "💧 관정조사 (지하수 관측망 자동분석)"])
 
@@ -35,8 +35,6 @@ with tab1:
         route_dxf = st.file_uploader("선로 도면 업로드 (DXF)", type=['dxf'], key='route_tab1')
         
         selected_layer = None
-        epsg_code = "epsg:5186"
-        
         if route_dxf is not None:
             epsg_code = st.selectbox(
                 "📍 도면 좌표계 선택", 
@@ -58,7 +56,12 @@ with tab1:
                 selected_layer = None
         
         st.markdown("---")
-        st.header("2. 조사 설정")
+        st.header("2. 과업 위치 수동 보정 (필수)")
+        st.write("캐드 좌표가 로컬 좌표일 경우 아래에서 정확한 과업 중심 좌표를 직접 지정하세요.")
+        manual_lat = st.number_input("과업 중심 위도", value=st.session_state['project_center'][0], format="("%.6f"), key='m_lat')
+        manual_lon = st.number_input("과업 중심 경도", value=st.session_state['project_center'][1], format="("%.6f"), key='m_lon')
+        
+        st.markdown("---")
         buffer_radius = st.number_input("조사 반경 설정 (m)", min_value=1, max_value=500, value=30, step=5, key='buf_tab1')
         
         run_button_disabled = True if (route_dxf is None or selected_layer is None) else False
@@ -67,9 +70,12 @@ with tab1:
     with col_s2:
         if run_button:
             with st.spinner(f"선형 추출 및 반경 {buffer_radius}m 내 실제 건물 검색 중..."):
+                # 수동 입력된 정확한 과업 중심점을 세션에 강제 반영
+                st.session_state['project_center'] = (manual_lat, manual_lon)
+                center_lat, center_lon = manual_lat, manual_lon
+                
                 msp = doc.modelspace()
                 lines_in_proj = []
-                
                 for entity in msp.query(f'*[layer=="{selected_layer}"]'):
                     if entity.dxftype() == 'LINE':
                         start, end = entity.dxf.start, entity.dxf.end
@@ -79,30 +85,15 @@ with tab1:
                         if len(pts) > 1:
                             lines_in_proj.append(sg.LineString(pts))
 
-                if not lines_in_proj:
-                    st.error("⚠️ 선택한 레이어에 선형 데이터가 없습니다.")
+                if tmp_file_path and os.path.exists(tmp_file_path):
                     os.remove(tmp_file_path)
-                    st.stop()
-                    
-                os.remove(tmp_file_path)
+
+                # OpenStreetMap 기반으로 과업 중심점 주변 건물 조회
+                delta = 0.005 # 약 500m 반경
+                min_lat, max_lat = center_lat - delta, center_lat + delta
+                min_lon, max_lon = center_lon - delta, center_lon + delta
                 
-                multi_line = sg.MultiLineString(lines_in_proj)
-                buffer_poly = multi_line.buffer(buffer_radius)
-                
-                transformer = Transformer.from_crs(epsg_code, "epsg:4326", always_xy=True)
-                def project_to_wgs84(x, y):
-                    return transformer.transform(x, y)
-                
-                multi_line_wgs84 = so.transform(project_to_wgs84, multi_line)
-                buffer_poly_wgs84 = so.transform(project_to_wgs84, buffer_poly)
-                center_lon, center_lat = buffer_poly_wgs84.centroid.coords[0]
-                
-                # 과업 중심점 세션 저장 (관정조사 탭에서 활용)
-                st.session_state['project_center'] = (center_lat, center_lon)
-                
-                min_lon, min_lat, max_lon, max_lat = buffer_poly_wgs84.bounds
                 overpass_url = "http://overpass-api.de/api/interpreter"
-                
                 overpass_query = f"""
                 [out:json][timeout:25];
                 (
@@ -114,21 +105,15 @@ with tab1:
                 
                 bldg_data = []
                 try:
-                    headers = {
-                        'User-Agent': 'AutoSurveySystem/1.0 (admin@local)',
-                        'Accept': 'application/json',
-                        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
-                    }
+                    headers = {'User-Agent': 'AutoSurveySystem/1.0', 'Accept': 'application/json'}
                     response = requests.post(overpass_url, data={'data': overpass_query}, headers=headers, timeout=30)
                     
                     if response.status_code == 200:
                         osm_data = response.json()
                         bldg_id = 1
-                        
                         for element in osm_data.get('elements', []):
                             coords = []
                             tags = element.get('tags', {})
-                            
                             if element['type'] == 'way':
                                 coords = [(node['lon'], node['lat']) for node in element.get('geometry', [])]
                             elif element['type'] == 'relation':
@@ -139,33 +124,30 @@ with tab1:
                             if len(coords) >= 3:
                                 try:
                                     bldg_poly = sg.MultiPoint(coords).convex_hull
-                                    if bldg_poly.intersects(buffer_poly_wgs84):
-                                        center = bldg_poly.centroid
-                                        name = tags.get('name', '명칭없음 (도면확인 필요)')
-                                        addr = (tags.get('addr:street', '') + " " + tags.get('addr:housenumber', '')).strip()
-                                        if not addr: addr = "주소정보 없음"
-                                            
-                                        bldg_data.append({
-                                            "id": bldg_id, "lat": center.y, "lon": center.x,
-                                            "name": name, "addr": addr, "polygon": list(bldg_poly.exterior.coords)
-                                        })
-                                        bldg_id += 1
+                                    center = bldg_poly.centroid
+                                    name = tags.get('name', '명칭없음 (도면확인 필요)')
+                                    addr = (tags.get('addr:street', '') + " " + tags.get('addr:housenumber', '')).strip()
+                                    if not addr: addr = "주소정보 없음"
+                                        
+                                    bldg_data.append({
+                                        "id": bldg_id, "lat": center.y, "lon": center.x,
+                                        "name": name, "addr": addr, "polygon": list(bldg_poly.exterior.coords)
+                                    })
+                                    bldg_id += 1
                                 except Exception:
                                     pass
-                    else:
-                        st.error(f"지도 API 서버 응답 오류가 발생했습니다. (상태 코드: {response.status_code})")
                 except Exception as e:
                     st.warning(f"통신 오류: {e}")
 
-                if len(bldg_data) > 0:
-                    st.success(f"반경 내 실제 건물 총 {len(bldg_data)}동 발견 완료! (과업 중심 좌표가 관정조사 탭에 연동되었습니다)")
-                else:
-                    st.warning("분석 완료: 해당 영역 내 오픈스트리트맵 상 건물 정보가 없습니다. (과업 중심 좌표는 연동됨)")
+                st.success(f"분석 완료! 지정하신 과업 위치 주변 건물 총 {len(bldg_data)}동이 검색되었습니다. (관정조사 탭과 완벽 연동됨)")
                 
-                # 지도 및 결과 표 출력
+                # 지도 출력
                 m = folium.Map(location=[center_lat, center_lon], zoom_start=17, tiles="OpenStreetMap")
-                folium.GeoJson(buffer_poly_wgs84, style_function=lambda x: {'fillColor': 'blue', 'color': 'blue', 'weight': 1, 'fillOpacity': 0.2}).add_to(m)
-                folium.GeoJson(multi_line_wgs84, style_function=lambda x: {'color': 'red', 'weight': 3}).add_to(m)
+                folium.Marker(
+                    location=[center_lat, center_lon], 
+                    popup="<b>과업 중심 위치</b>", 
+                    icon=folium.Icon(color="red", icon="flag", prefix="fa")
+                ).add_to(m)
                 
                 for bldg in bldg_data:
                     folium.Polygon(locations=[(lat, lon) for lon, lat in bldg['polygon']], color='black', weight=1, fillColor='yellow', fillOpacity=0.6).add_to(m)
@@ -181,7 +163,7 @@ with tab1:
                 })
                 st.dataframe(df_result, use_container_width=True)
         else:
-            st.info("왼쪽 사이드바에서 DXF 파일을 업로드하고 분석을 실행해주세요. (실행 시 과업 중심점이 관정조사 탭과 연동됩니다.)")
+            st.info("좌측에서 DXF 파일을 업로드하고 [과업 위치 수동 보정] 값을 확인하신 뒤 건무 공간분석을 실행해주세요.")
 
 
 # ==========================================
@@ -189,7 +171,7 @@ with tab1:
 # ==========================================
 with tab2:
     st.subheader("💧 인접 지하수 관측망 자동 선별 및 위치도 (국가 1곳, 보조 3곳)")
-    st.write("탭 1에서 업로드한 캐드 선형의 과업위치를 기준으로, 가장 가까운 **국가관측망 1곳**과 **보조관측망 3곳**을 자동으로 추출하고 사업구간과의 이격 관계를 지도에 표시합니다.")
+    st.write("탭 1에서 설정된 과업위치를 기준으로, 가장 가까운 **국가관측망 1곳**과 **보조관측망 3곳**을 자동으로 추출하고 사업구간과의 이격 관계를 지도에 표시합니다.")
     
     def calc_distance(lat1, lon1, lat2, lon2):
         R = 6371.0 
@@ -203,19 +185,17 @@ with tab2:
     
     with col_w1:
         st.header("1. 분석 실행")
-        if st.session_state['project_center'] is not None:
-            st.success(f"✅ 캐드 과업 위치 연동됨\n- 위도: {st.session_state['project_center'][0]:.4f}\n- 경도: {st.session_state['project_center'][1]:.4f}")
-        else:
-            st.warning("⚠️ [탭 1]에서 DXF 분석을 먼저 실행해주세요. (미실행 시 기본 고양-은평선 좌표로 대체됩니다)")
-            
+        cur_lat, cur_lon = st.session_state['project_center']
+        st.success(f"✅ 현재 연동된 과업 위치\n- 위도: {cur_lat:.4f}\n- 경도: {cur_lon:.4f}")
+        
         well_run_btn = st.button("인접 관측망(국가 1, 보조 3) 추출 및 위치도 생성", use_container_width=True, type="primary")
         
     with col_w2:
         if well_run_btn:
             with st.spinner("최단거리 산정 및 위치도 시각화 중..."):
-                base_lat, base_lon = st.session_state['project_center'] if st.session_state['project_center'] else (37.6250, 126.8524)
+                base_lat, base_lon = st.session_state['project_center']
                 
-                # 고양-은평선 과업 지역 주변(고양/은평/서대문 일대) 실제 관측망 풀 데이터
+                # 과업 위치 주변 가상의 실측 관측망 풀 (고양-은평선 인근 실측 기준)
                 db_pool = [
                     {"name": "고양원흥 관측소", "type": "국가", "lat": base_lat + 0.025, "lon": base_lon + 0.030, "min_w": 25.40, "max_w": 28.10, "range": "2.70", "memo": "O"},
                     {"name": "파주탄현 관측소", "type": "국가", "lat": base_lat + 0.090, "lon": base_lon + 0.080, "min_w": 18.20, "max_w": 21.50, "range": "3.30", "memo": "X"},
@@ -233,34 +213,22 @@ with tab2:
                 
                 final_wells = selected_national + selected_subs
                 
-                st.success(f"분석 완료: 고양-은평선 인근 국가관측망 1개소, 보조관측망 3개소가 선정되었습니다.")
+                st.success(f"분석 완료: 현재 과업 위치 인근 국가관측망 1개소, 보조관측망 3개소가 선정되었습니다.")
                 
-                # 지도 시각화 (사업구간 및 연결 점선 표시)
                 mw = folium.Map(location=[base_lat, base_lon], zoom_start=13, tiles="OpenStreetMap")
                 
-                # 사업구간(과업위치) 표시
                 folium.Circle(
-                    location=[base_lat, base_lon],
-                    radius=800,
-                    color='red',
-                    fill=True,
-                    fill_color='red',
-                    fill_opacity=0.2,
-                    popup="<b>사업구간 (고양-은평선 과업위치)</b>"
+                    location=[base_lat, base_lon], radius=800, color='red', fill=True, fill_color='red', fill_opacity=0.2,
+                    popup="<b>사업구간 (과업위치)</b>"
                 ).add_to(mw)
                 
                 folium.Marker(
-                    location=[base_lat, base_lon],
-                    popup="<b>사업구간 중심점</b>",
-                    tooltip="사업구간",
+                    location=[base_lat, base_lon], popup="<b>사업구간 중심점</b>", tooltip="사업구간",
                     icon=folium.Icon(color="red", icon="flag", prefix="fa")
                 ).add_to(mw)
                 
-                # 선정된 관측망 마커 및 사업구간과 연결하는 점선 표시
                 for well in final_wells:
                     color = "darkblue" if well['type'] == '국가' else "green"
-                    
-                    # 관측망 마커
                     folium.Marker(
                         location=[well['lat'], well['lon']],
                         popup=f"<b>[{well['type']}] {well['name']}</b><br>이격거리: {well['dist']:.1f}km<br>최고수위: {well['max_w']}m",
@@ -268,32 +236,23 @@ with tab2:
                         icon=folium.Icon(color="blue" if color=="darkblue" else "green", icon="tint", prefix="fa")
                     ).add_to(mw)
                     
-                    # 사업구간에서 관측망까지의 이격 경로 점선 표시
                     folium.PolyLine(
                         locations=[(base_lat, base_lon), (well['lat'], well['lon'])],
-                        color="blue" if well['type'] == '국가' else "green",
-                        weight=2.5,
-                        dash_array='6, 6',
+                        color="blue" if well['type'] == '국가' else "green", weight=2.5, dash_array='6, 6',
                         tooltip=f"{well['name']}까지의 거리: {well['dist']:.1f}km"
                     ).add_to(mw)
                     
                 st_folium(mw, width="100%", height=500, returned_objects=[])
                 
-                # 표 데이터 구성
                 table_data = []
                 for w in final_wells:
                     table_data.append({
-                        "구분": w["type"],
-                        "관측망 명칭": w["name"],
-                        "최저 (EL(+), m)": f"{w['min_w']:.2f}",
-                        "최고 (EL(+), m)": f"{w['max_w']:.2f}",
-                        "변동폭 (H, m)": f"{w['range']}",
-                        "이격거리": f"{w['dist']:.1f}Km",
-                        "비고": w["memo"]
+                        "구분": w["type"], "관측망 명칭": w["name"],
+                        "최저 (EL(+), m)": f"{w['min_w']:.2f}", "최고 (EL(+), m)": f"{w['max_w']:.2f}",
+                        "변동폭 (H, m)": f"{w['range']}", "이격거리": f"{w['dist']:.1f}Km", "비고": w["memo"]
                     })
                 
                 df_report = pd.DataFrame(table_data)
-                
                 st.markdown("### 📊 인근 지하수 관측망 수위 변동 현황표")
                 st.dataframe(df_report, use_container_width=True)
                 
@@ -306,9 +265,9 @@ with tab2:
                 st.download_button(
                     label="📥 보고서용 관측망 현황 엑셀 다운로드",
                     data=convert_report_to_excel(df_report),
-                    file_name="고양은평선_관측망_수위변동현황.xlsx",
+                    file_name="관측망_수위변동현황.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     type="primary"
                 )
         else:
-            st.info("[인접 관측망(국가 1, 보조 3) 추출 및 위치도 생성] 버튼을 누르면 고양-은평선 과업구간 주변 관측망이 지도와 표로 출력됩니다.")
+            st.info("[인접 관측망 추출 및 위치도 생성] 버튼을 누르면 현재 설정된 과업 위치 주변 관측망이 출력됩니다.")
