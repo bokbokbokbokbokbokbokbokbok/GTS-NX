@@ -36,7 +36,7 @@ st.title("🏗️ 철도/도로 연도변조사 및 GIMS 지하수 관정조사 
 st.write("국토정보플랫폼, **씨리얼(Seereal) 건축물대장 API** 및 **국가지하수정보센터(GIMS)** 기준 도면 선형 인식, 건축물 상세 정보 연동 및 수위 변동 자동화 시스템입니다.")
 
 # 탭 구성 (Tab 1: 연도변조사 / Tab 2: GIMS 관정조사)
-tab1, tab2 = tab1, tab2 = st.tabs(["🏗️ 연도변조사 (씨리얼 건축물대장 연동)", "💧 GIMS 관정조사 (근 3개년 수위 및 삽도 자동분석)"])
+tab1, tab2 = st.tabs(["🏗️ 연도변조사 (씨리얼 건축물대장 연동)", "💧 GIMS 관정조사 (근 3개년 수위 및 삽도 자동분석)"])
 
 # ==========================================
 # [TAB 1] 연도변조사 (건물 분석 및 씨리얼 데이터 연동 정밀 보정)
@@ -241,7 +241,7 @@ with tab1:
                 st.session_state['buffer_poly_wgs84'] = buffer_poly_wgs84
                 st.session_state['multi_line_wgs84'] = multi_line_wgs84
 
-        # 결과 데이터가 있을 때 렌더링 (퀵 줌인 셀렉트박스 및 강제 매핑 맵 포함)
+        # 결과 데이터가 있을 때 렌더링
         if st.session_state['bldg_data'] is not None and len(st.session_state['bldg_data']) > 0:
             bldg_data = st.session_state['bldg_data']
             buffer_poly_wgs84 = st.session_state['buffer_poly_wgs84']
@@ -249,9 +249,9 @@ with tab1:
 
             st.success(f"캐드 좌표 매핑 완료 및 씨리얼(Seereal) 대장 정밀 연동 완료! / 반경 내 건축물 {len(bldg_data)}동 검색됨")
             
-            # [필수 추가] 퀵 줌인 컨트롤러 UI
+            # [UI 배치 수정] 표보다 상단에 퀵 줌인 컨트롤러를 배치하여 직관적으로 선택 가능
             st.markdown("### 🎯 대상 건축물 퀵 줌인 컨트롤러")
-            st.write("원하시는 건물의 **연번과 명칭**을 선택하시면 지도가 해당 건물 위치로 즉시 확대(줌인)됩니다.")
+            st.info("💡 아래 셀렉트박스에서 **연번과 명칭**을 선택하시면 즉시 해당 건물 위치로 지도가 확대(줌인)됩니다.")
             
             bldg_options = {0: "🗺️ 전체 노선 및 반경 범위 보기 (기본)"}
             for b in bldg_data:
@@ -292,7 +292,6 @@ with tab1:
                 number_icon = folium.DivIcon(html=f"""<div style="background-color: {'#e74c3c' if is_selected else 'white'}; border: 2px solid #e74c3c; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-weight: bold; color: {'white' if is_selected else '#e74c3c'}; font-size: 12px; margin-left: -12px; margin-top: -12px;">{bldg['연번']}</div>""")
                 folium.Marker(location=[bldg['lat'], bldg['lon']], icon=number_icon, tooltip=f"연번 {bldg['연번']} ({bldg['명칭']})").add_to(m)
             
-            # [핵심 수정] st_folium에 center와 zoom 인자 강제 적용
             st_folium(
                 m, 
                 width="100%", 
@@ -302,6 +301,7 @@ with tab1:
                 returned_objects=[]
             )
             
+            st.markdown("---")
             df_result = pd.DataFrame(bldg_data)[["연번", "명칭", "도로명", "지번", "구조형식", "높이(m)\n(건축면적, m2)", "층수\n(지하/지상)", "용도", "준공년도", "기한", "등급", "기초형식\n(내진설계)", "건축물대장\n유무", "도면\n보유현황", "비고(지역 및 구역 등)"]]
             st.markdown("### 📊 연도변조사 대상 건축물 현황표 (수정 불가 완벽 조회 전용)")
             st.table(df_result)
